@@ -1,0 +1,41 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+secrets.*
+credentials.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+
+# Local IDE and editor state
+.vs/
+*.uvgui.*
+*.uvopt
+
+# Build output and caches
+**/out_file/
+**/Objects/
+**/Listings/
+*.axf
+*.elf
+*.hex
+*.obj
+*.o
+*.d
+*.lst
+*.map
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# OS metadata
+Thumbs.db
+.DS_Store

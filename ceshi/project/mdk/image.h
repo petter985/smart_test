@@ -8,8 +8,6 @@
 #define CODE_IMAGE_H_
 #include "zf_common_headfile.h"
 extern uint8 MID_W;
-extern uint8 FIRE_ROW_HIGH;
-extern uint8 FIRE_ROW_LOW;
 extern uint8 l_line_x[MT9V03X_H];
 extern uint8 r_line_x[MT9V03X_H];
 extern float final_mid_line;
@@ -121,8 +119,6 @@ extern uint8 circle_y2;
 extern uint8 circle_point_flag2;
 void find_circle_point2(uint8 type,uint8 down_y,uint8 up_y);
 void Check_Out(void);
-void handle_daba(void);
-void handle_daba2(void);
 void qulv_characteristic();
 
 uint8 refine_right(uint8 row, uint8 start);
