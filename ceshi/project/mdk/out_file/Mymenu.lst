@@ -1,0 +1,493 @@
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE Mymenu
+OBJECT MODULE PLACED IN .\out_file\Mymenu.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE Mymenu.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR(
+                    -..\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\c
+                    -ode;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_fil
+                    -e\Mymenu.lst) OBJECT(.\out_file\Mymenu.obj) 
+
+stmt  level    source
+
+    1          /****************************************************************************************************
+    2          * 文件名称        Mymenu.c
+    3          * 适用平台        STC32G144K246（Ai8052U），MDK FOR C251
+    4          * 功能说明        菜单树构建、显示、按键操作，集成 Flash 断电保护
+    5          * 修改记录
+    6          * 2026-07-18      V1.1 集成 Flash 断电保护
+    7          * 2026-07-22      V1.2 每个参数独立步长；select 进入文件夹；第一个元素向上返回上级
+    8          ****************************************************************************************************/
+    9          
+   10          #include "Mymenu.h"
+   11          #include "flash.h"
+   12          #include <string.h>
+   13          
+   14          /* 在 Menu_Item m24; 后面加 */
+   15          
+   16          #define H 16
+   17          /* 在 Menu_Item m24; 后面加 */
+   18          Menu_Item m19;   /* plan 切换项 */
+   19          Menu_Item head;
+   20          Menu_Item *key;
+   21          
+   22          Menu_Item m1;
+   23          Menu_Item m3;
+   24          Menu_Item m4;
+   25          Menu_Item m5;
+   26          Menu_Item m6;
+   27          Menu_Item m7;
+   28          Menu_Item m8;
+   29          Menu_Item m9;
+   30          Menu_Item m10;
+   31          Menu_Item m11;
+   32          Menu_Item m12;
+   33          Menu_Item m13;
+   34          Menu_Item m14;
+   35          Menu_Item m15;
+   36          Menu_Item m16;
+   37          Menu_Item m17;
+   38          Menu_Item m18;
+   39          Menu_Item m19;
+   40          Menu_Item m20;
+   41          Menu_Item m21;
+   42          Menu_Item m22;
+   43          Menu_Item m23;
+   44          Menu_Item m24;
+   45          
+   46          /* image 子菜单节点 */
+   47          Menu_Item m2_1;
+   48          Menu_Item m2_2;
+   49          Menu_Item m2_3;
+   50          
+   51          
+   52          uint8 key_flag = 0;
+   53          volatile uint8 menu_save_request = 0;
+   54          uint8  menu_flash_status = 0xFF;    /* 本次保存结果 */
+   55          uint8  menu_load_status  = 0xFF;    /* 开机读取结果 */
+   56          uint16 menu_save_count = 0;
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 2   
+
+   57          static uint8  menu_dirty = 0;
+   58          static uint16 menu_dirty_tick = 0;
+   59          
+   60          /*----------------------------------------------------------------------------------------------------
+   61          * Flash 动作项回调
+   62          ----------------------------------------------------------------------------------------------------*/
+   63          static void menu_save_params(void)
+   64          {
+   65   1          menu_save_to_flash(&head);
+   66   1      }
+   67          
+   68          static void menu_load_params(void)
+   69          {
+   70   1          menu_load_from_flash(&head);
+   71   1      }
+   72          
+   73          static void menu_erase_params(void)
+   74          {
+   75   1          menu_erase_flash(&head);
+   76   1      }
+   77          
+   78          void menu_init(void)
+   79          {
+   80   1          FLASH_STA menu_sta;
+   81   1          
+   82   1          /* 原有 head 初始化... */
+   83   1          head.dat = NULL;
+   84   1          head.father = NULL;
+   85   1          head.first_son = NULL;
+   86   1          head.last_brother = NULL;
+   87   1          head.next_brother = NULL;
+   88   1          head.kind = MENU_Folder;
+   89   1          head.nam = "MENU";
+   90   1          head.No = 0;
+   91   1          head.sons = 0;
+   92   1          head.select = 0;
+   93   1          head.flash_addr = 0;
+   94   1          head.action = NULL;
+   95   1          head.step = 1.0f;
+   96   1      
+   97   1          /* ========== 主菜单 ========== */
+   98   1          Creat_Menu_Folder(&head, &m1, "menu");
+   99   1      
+  100   1          /* 原有参数项... */
+  101   1          //Create_Menu_Number(&head, &m3,  "baoguang",    &MT9V03X_EXP_TIME_DEF, int16_Box, 5);
+  102   1          
+  103   1              Create_Menu_Number(&head, &m4,  "D",           &kd_m,                  float_Box, 100.0f);
+  104   1              Create_Menu_Number(&head, &m6,  "Kp_m",        &kp_m,                  float_Box, 5.0f);
+  105   1          //Create_Menu_Number(&head, &m7,  "wandao_p_zengyi",   &wandao_p_zengyi,             float_Box, 5);
+  106   1          Create_Menu_Number(&head, &m8,  "beid_spk",   &beid_spk,             float_Box, 10);
+  107   1          
+  108   1      
+  109   1          Create_Menu_Number(&head, &m11, "wan_p",       &wandao_p_zengyi,       float_Box, 1);
+  110   1          Create_Menu_Number(&head, &m12, "zhi_p",       &zhidao_p_yizhi,        float_Box, 1.0f);
+  111   1          Create_Menu_Number(&head, &m13, "else_p",      &else_p_yizhi,          float_Box, 1.0f);
+  112   1          //Create_Menu_Number(&head, &m16, "ruwan_speed", &ruwan_speed,           float_Box, 2);
+  113   1          Create_Menu_Number(&head, &m17, "huandao_speed",&huandao_speed,        float_Box, 2);
+  114   1          Create_Menu_Number(&head, &m18, "else_speed",  &else_speed,            float_Box, 2);
+  115   1      
+  116   1          /* ========== Flash 参数恢复 ========== */
+  117   1          Flash_Init(system_clock);                       /* 必须在 clock_init 之后 */
+  118   1      
+  119   1          menu_sta = menu_load_from_flash(&head);
+  120   1          menu_load_status = (uint8)menu_sta;
+  121   1      
+  122   1          if (menu_sta != FLASH_OK)
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 3   
+
+  123   1          {
+  124   2              menu_sta = menu_save_to_flash(&head);       /* 首次上电或数据损坏：写入默认参数 */
+  125   2          }
+  126   1          menu_flash_status = (uint8)menu_sta;
+  127   1          menu_save_count = 0;
+  128   1      
+  129   1          key = head.first_son;
+  130   1      }
+  131          
+  132          void menu_flash_task(void)
+  133          {
+  134   1          static uint8 last_show = 0;
+  135   1      
+  136   1          /* 关闭菜单拨码开关时，把尚未确认的编辑落盘 */
+  137   1          if (last_show && !menu_show_flag)
+  138   1          {
+  139   2              key->select = 0;
+  140   2              menu_save_request = 1;
+  141   2          }
+  142   1          last_show = menu_show_flag;
+  143   1      
+  144   1          /* 编辑后 1.2s 内没有新按键就自动保存，防止没退出编辑就断电 */
+  145   1          if (menu_dirty && ((uint16)(menu_tick_30ms - menu_dirty_tick) >= 40))
+  146   1          {
+  147   2              menu_dirty = 0;
+  148   2              menu_save_request = 1;
+  149   2          }
+  150   1      
+  151   1          if (!menu_save_request) return;
+  152   1      
+  153   1          menu_save_request = 0;
+  154   1          menu_flash_status = (uint8)menu_save_to_flash(&head);
+  155   1          if (menu_flash_status == FLASH_OK)
+  156   1          {
+  157   2              menu_save_count++;
+  158   2          }
+  159   1      }
+  160          
+  161          void show_number(void)
+  162          {
+  163   1          int i;
+  164   1          Menu_Item* h = key->father;
+  165   1          Menu_Item* s = h->first_son;
+  166   1      
+  167   1          for(i = 0; i < h->sons; i++)
+  168   1          {
+  169   2              if(s->select)
+  170   2                  ips200_show_char(110, i * H + 10, '*');
+  171   2              else
+  172   2                  ips200_show_char(110, i * H + 10, ' ');
+  173   2      
+  174   2              switch(s->kind)
+  175   2              {
+  176   3                  case int32_Box:
+  177   3                      ips200_show_int32(120, i * H + 10, *(int32 *)s->dat, 10);
+  178   3                      break;
+  179   3                  case uint32_Box:
+  180   3                      ips200_show_int32(120, i * H + 10, (int32)(*(uint32 *)s->dat), 10);
+  181   3                      break;
+  182   3                  case int16_Box:
+  183   3                      ips200_show_int16(120, i * H + 10, *(int16 *)s->dat);
+  184   3                      break;
+  185   3                  case uint16_Box:
+  186   3                      ips200_show_uint16(120, i * H + 10, *(uint16 *)s->dat);
+  187   3                      break;
+  188   3                  case int8_Box:
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 4   
+
+  189   3                      ips200_show_int8(120, i * H + 10, *(int8 *)s->dat);
+  190   3                      break;
+  191   3                  case uint8_Box:
+  192   3                      ips200_show_uint8(120, i * H + 10, *(uint8 *)s->dat);
+  193   3                      break;
+  194   3                  case float_Box:
+  195   3                      ips200_show_float(120, i * H + 10, *(float *)s->dat, 4,  4);
+  196   3                      break;
+  197   3                  case MENU_Action:
+  198   3                      ips200_show_string(120, i * H + 10, "[run]");
+  199   3                      break;
+  200   3                  default:
+  201   3                      break;
+  202   3              }
+  203   2              s = s->next_brother;
+  204   2          }
+  205   1      }
+  206          
+  207          void show_key(void)
+  208          {
+  209   1          int i;
+  210   1          Menu_Item* h = key->father;
+  211   1          Menu_Item* s = h->first_son;
+  212   1      
+  213   1          for(i = 0; i < h->sons; i++)
+  214   1          {
+  215   2              if(s == key)
+  216   2              {
+  217   3                  ips200_show_string(0, i * H + 10, "->");
+  218   3              }
+  219   2              else
+  220   2              {
+  221   3                  ips200_show_string(0, i * H + 10, "  ");
+  222   3              }
+  223   2              s = s->next_brother;
+  224   2          }
+  225   1      }
+  226          
+  227          static void show_flash_status(void)
+  228          {
+  229   1          ips200_show_string(17, 230, "L");
+  230   1          if (menu_load_status == FLASH_OK)
+  231   1          {
+  232   2              ips200_show_string(25, 230, "OK ");
+  233   2          }
+  234   1          else if (menu_load_status == FLASH_NO_DATA)
+  235   1          {
+  236   2              ips200_show_string(25, 230, "NEW");
+  237   2          }
+  238   1          else
+  239   1          {
+  240   2              ips200_show_string(25, 230, "ERR");
+  241   2          }
+  242   1      
+  243   1          ips200_show_string(57, 230, "S");
+  244   1          ips200_show_int32(65, 230, (int32)menu_save_count, 3);
+  245   1      
+  246   1          if (menu_flash_status == FLASH_OK)
+  247   1          {
+  248   2              ips200_show_string(97, 230, "OK ");
+  249   2          }
+  250   1          else if (menu_flash_status == FLASH_NO_DATA)
+  251   1          {
+  252   2              ips200_show_string(97, 230, "NEW");
+  253   2          }
+  254   1          else
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 5   
+
+  255   1          {
+  256   2              ips200_show_string(97, 230, "ERR");
+  257   2          }
+  258   1      }
+  259          
+  260          void menu_show(void)
+  261          {
+  262   1          int i;
+  263   1          Menu_Item* h;
+  264   1          Menu_Item* s;
+  265   1      
+  266   1          if (key == NULL)
+  267   1          {
+  268   2              key = &head;
+  269   2          }
+  270   1      
+  271   1          h = key->father;
+  272   1          s = h->first_son;
+  273   1      
+  274   1          for(i = 0; i < h->sons; i++)
+  275   1          {
+  276   2              ips200_show_string(17, i * H + 10, s->nam);
+  277   2              s = s->next_brother;
+  278   2          }
+  279   1          show_key();
+  280   1          show_number();
+  281   1          show_flash_status();
+  282   1      }
+  283          
+  284          void key_down(void)
+  285          {
+  286   1          if(key->next_brother != NULL)
+  287   1              key = key->next_brother;
+  288   1      }
+  289          
+  290          /*====================================================================================================
+  291          * 光标在第一个元素按向上 = 返回上级菜单
+  292          ====================================================================================================*/
+  293          void key_up(void)
+  294          {
+  295   1          if(key->last_brother != NULL)
+  296   1              key = key->last_brother;
+  297   1          else
+  298   1              key_quit();
+  299   1      }
+  300          
+  301          void key_enter(void)
+  302          {
+  303   1          if(key->sons > 0)
+  304   1                      {
+  305   2              key = key->first_son;
+  306   2                               ips200_clear();
+*** WARNING C96 IN LINE 306 OF Mymenu.c: 'ips200_clear': too few actual parameters
+  307   2                      }
+  308   1      }
+  309          
+  310          void key_quit(void)
+  311          {
+  312   1          if(key->father->father != NULL)
+  313   1                      {
+  314   2              key = key->father;
+  315   2                               ips200_clear();
+*** WARNING C96 IN LINE 315 OF Mymenu.c: 'ips200_clear': too few actual parameters
+  316   2                      }
+  317   1      }
+  318          
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 6   
+
+  319          /*====================================================================================================
+  320          * 核心修改：文件夹按 select 进入子菜单
+  321          ====================================================================================================*/
+  322          void key_select(void)
+  323          {
+  324   1          /* 动作项：执行回调 */
+  325   1          if(key->kind == MENU_Action)
+  326   1          {
+  327   2              if(key->action != NULL)
+  328   2                  key->action();
+  329   2              return;
+  330   2          }
+  331   1      
+  332   1          /* 文件夹：有子节点就进入子菜单 */
+  333   1          if(key->kind == MENU_Folder)
+  334   1          {
+  335   2              if(key->sons > 0){
+  336   3                  key = key->first_son;
+  337   3                  ips200_clear();
+*** WARNING C96 IN LINE 337 OF Mymenu.c: 'ips200_clear': too few actual parameters
+  338   3              }
+  339   2              return;
+  340   2          }
+  341   1      
+  342   1          /* 数值项：切换编辑模式（0<->1） */
+  343   1          key->select = !key->select;
+  344   1      
+  345   1          /* 退出编辑模式（select 从 1 变 0） */
+  346   1          if(!key->select)
+  347   1          {
+  348   2              /* 退出编辑：请求主循环写 Flash（不能在定时器中断里擦写） */
+  349   2              menu_save_request = 1;
+  350   2              menu_dirty = 0;
+  351   2          }
+  352   1      }
+  353          
+  354          /*====================================================================================================
+  355          * 核心修改：使用 key->step 代替固定值
+  356          ====================================================================================================*/
+  357          void key_plus(void)
+  358          {
+  359   1          switch(key->kind)
+  360   1          {
+  361   2              case int32_Box:
+  362   2                  *(int32 *)key->dat += (int32)key->step;
+  363   2                  break;
+  364   2              case uint32_Box:
+  365   2                  *(uint32 *)key->dat += (uint32)key->step;
+  366   2                  break;
+  367   2              case int16_Box:
+  368   2                  *(int16 *)key->dat += (int16)key->step;
+  369   2                  break;
+  370   2              case uint16_Box:
+  371   2                  *(uint16 *)key->dat += (uint16)key->step;
+  372   2                  break;
+  373   2              case int8_Box:
+  374   2                  *(int8 *)key->dat += (int8)key->step;
+  375   2                  break;
+  376   2              case uint8_Box:
+  377   2                  *(uint8 *)key->dat += (uint8)key->step;
+  378   2                  break;
+  379   2              case float_Box:
+  380   2                  *(float *)key->dat += key->step;
+  381   2                  break;
+  382   2              default:
+  383   2                  break;
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 7   
+
+  384   2          }
+  385   1      
+  386   1          menu_dirty = 1;
+  387   1          menu_dirty_tick = menu_tick_30ms;
+  388   1      }
+  389          
+  390          void key_sub(void)
+  391          {
+  392   1          switch(key->kind)
+  393   1          {
+  394   2              case int32_Box:
+  395   2                  *(int32 *)key->dat -= (int32)key->step;
+  396   2                  break;
+  397   2              case uint32_Box:
+  398   2                  *(uint32 *)key->dat -= (uint32)key->step;
+  399   2                  break;
+  400   2              case int16_Box:
+  401   2                  *(int16 *)key->dat -= (int16)key->step;
+  402   2                  break;
+  403   2              case uint16_Box:
+  404   2                  *(uint16 *)key->dat -= (uint16)key->step;
+  405   2                  break;
+  406   2              case int8_Box:
+  407   2                  *(int8 *)key->dat -= (int8)key->step;
+  408   2                  break;
+  409   2              case uint8_Box:
+  410   2                  *(uint8 *)key->dat -= (uint8)key->step;
+  411   2                  break;
+  412   2              case float_Box:
+  413   2                  *(float *)key->dat -= key->step;
+  414   2                  break;
+  415   2              default:
+  416   2                  break;
+  417   2          }
+  418   1      
+  419   1          menu_dirty = 1;
+  420   1          menu_dirty_tick = menu_tick_30ms;
+  421   1      }
+  422          
+  423          void key_1(void)
+  424          {
+  425   1          if(key->select == 0)
+  426   1              key_up();
+  427   1          else
+  428   1              key_plus();
+  429   1      }
+  430          
+  431          void key_2(void)
+  432          {
+  433   1          if(key->select == 0)
+  434   1              key_down();
+  435   1          else
+  436   1              key_sub();
+  437   1      }
+*** WARNING C174 IN LINE 73 OF Mymenu.c: 'menu_erase_params': unreferenced 'static' function
+*** WARNING C174 IN LINE 68 OF Mymenu.c: 'menu_load_params': unreferenced 'static' function
+*** WARNING C174 IN LINE 63 OF Mymenu.c: 'menu_save_params': unreferenced 'static' function
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+  code size            =    ------     ------
+  ecode size           =      2881     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =      1121         18
+C251 COMPILER V5.60.0,  Mymenu                                                             08/11/26  15:04:38  PAGE 8   
+
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+  hconst size          =       148     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  6 WARNING(S),  0 ERROR(S)

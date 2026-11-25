@@ -1,0 +1,647 @@
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE my_vofa
+OBJECT MODULE PLACED IN .\out_file\my_vofa.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE my_vofa.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR
+                    -(..\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\
+                    -code;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_fi
+                    -le\my_vofa.lst) OBJECT(.\out_file\my_vofa.obj) 
+
+stmt  level    source
+
+    1          /**
+    2           * @file    my_vofa.c
+    3           * @brief   VOFA+ WiFi 调参模块实现（适配逐飞 WiFi2 模块 + STC32G144K）
+    4           * @version V1.0
+    5           */
+    6          #include "my_vofa.h"
+    7          
+    8          //==================================================================
+    9          //                          内部定义
+   10          //==================================================================
+   11          
+   12          // JustFloat 协议帧尾（float 类型的 NaN：0x7f800000）
+   13          #define VOFA_JUSTFLOAT_TAIL0    0x00
+   14          #define VOFA_JUSTFLOAT_TAIL1    0x00
+   15          #define VOFA_JUSTFLOAT_TAIL2    0x80
+   16          #define VOFA_JUSTFLOAT_TAIL3    0x7f
+   17          
+   18          // 命令起始符
+   19          #define VOFA_CMD_SET            '$'     // 设置参数：$<index>,<value>\n
+   20          #define VOFA_CMD_REPORT_DEF     '#'     // 请求上报参数定义：#\n
+   21          #define VOFA_CMD_REPORT_VAL     '?'     // 请求上报参数值：?\n
+   22          
+   23          //==================================================================
+   24          //                          内部变量
+   25          //==================================================================
+   26          
+   27          // 参数表
+   28          static vofa_param_t vofa_params[VOFA_MAX_PARAMS];
+   29          
+   30          // 接收缓冲区（命令解析用）
+   31          static uint8  vofa_rx_buf[VOFA_RX_BUF_SIZE];
+   32          static uint16 vofa_rx_len = 0;
+   33          
+   34          // 发送缓冲区（波形发送用，JustFloat: 通道数*4 + 4字节帧尾）
+   35          static uint8  vofa_tx_buf[VOFA_MAX_CHANNELS * 4 + 4];
+   36          
+   37          // 文本发送缓冲区（参数上报用）
+   38          static uint8  vofa_text_buf[96];
+   39          
+   40          //==================================================================
+   41          //                     底层 WiFi 收发封装
+   42          //==================================================================
+   43          
+   44          /**
+   45           * @brief 通过 WiFi 发送数据
+   46           */
+   47          static void vofa_wifi_send(uint8 *dat, uint16 len)
+   48          {
+   49   1          if(len > 0)
+   50   1          {
+   51   2              wifi_spi_send_buffer(dat, (uint32)len);
+   52   2          }
+   53   1      }
+   54          
+   55          /**
+   56           * @brief 通过 WiFi 接收数据
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 2   
+
+   57           * @return 实际接收的字节数
+   58           * @note   逐飞库中函数名拼写为 "reveive"（非 "receive"），
+   59           *         如编译报错未定义，请将下方函数名改为 wifi_spi_receive_buffer
+   60           */
+   61          static uint16 vofa_wifi_receive(uint8 *dat, uint16 max_len)
+   62          {
+   63   1          return (uint16)wifi_spi_read_buffer(dat, (uint32)max_len);
+   64   1      }
+   65          
+   66          //==================================================================
+   67          //                     JustFloat 波形发送
+   68          //==================================================================
+   69          
+   70          /**
+   71           * @brief JustFloat 协议发送波形（二进制）
+   72           * @note  STC32G 为小端序，float 内存布局与协议一致，可直接拷贝
+   73           */
+   74          static void vofa_send_justfloat(float *dat, uint8 channel_num)
+   75          {
+   76   1          uint8  i;
+   77   1          uint8 *ptr;
+   78   1          uint16 total_len;
+   79   1      
+   80   1          if(channel_num > VOFA_MAX_CHANNELS)
+   81   1          {
+   82   2              channel_num = VOFA_MAX_CHANNELS;
+   83   2          }
+   84   1          if(channel_num == 0)
+   85   1          {
+   86   2              return;
+   87   2          }
+   88   1      
+   89   1          ptr = vofa_tx_buf;
+   90   1      
+   91   1          // 拷贝 float 数据（小端序直接拷贝，STC32G 天然兼容）
+   92   1          for(i = 0; i < channel_num; i++)
+   93   1          {
+   94   2              // 逐字节拷贝，避免对齐问题
+   95   2              *ptr++ = ((uint8 *)&dat[i])[0];
+   96   2              *ptr++ = ((uint8 *)&dat[i])[1];
+   97   2              *ptr++ = ((uint8 *)&dat[i])[2];
+   98   2              *ptr++ = ((uint8 *)&dat[i])[3];
+   99   2          }
+  100   1      
+  101   1          // 帧尾
+  102   1          *ptr++ = VOFA_JUSTFLOAT_TAIL0;
+  103   1          *ptr++ = VOFA_JUSTFLOAT_TAIL1;
+  104   1          *ptr++ = VOFA_JUSTFLOAT_TAIL2;
+  105   1          *ptr++ = VOFA_JUSTFLOAT_TAIL3;
+  106   1      
+  107   1          total_len = (uint16)(channel_num * 4 + 4);
+  108   1          vofa_wifi_send(vofa_tx_buf, total_len);
+  109   1      }
+  110          
+  111          /**
+  112           * @brief FireWater 协议发送波形（文本）
+  113           */
+  114          static void vofa_send_firewater(float *dat, uint8 channel_num)
+  115          {
+  116   1          uint16 offset = 0;
+  117   1          uint8  i;
+  118   1      
+  119   1          if(channel_num > VOFA_MAX_CHANNELS)
+  120   1          {
+  121   2              channel_num = VOFA_MAX_CHANNELS;
+  122   2          }
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 3   
+
+  123   1          if(channel_num == 0)
+  124   1          {
+  125   2              return;
+  126   2          }
+  127   1      
+  128   1          for(i = 0; i < channel_num; i++)
+  129   1          {
+  130   2              if(i == 0)
+  131   2              {
+  132   3                  offset += (uint16)sprintf((char *)&vofa_tx_buf[offset], "%.4f", dat[i]);
+  133   3              }
+  134   2              else
+  135   2              {
+  136   3                  offset += (uint16)sprintf((char *)&vofa_tx_buf[offset], ",%.4f", dat[i]);
+  137   3              }
+  138   2      
+  139   2              // 防止缓冲区溢出
+  140   2              if(offset >= sizeof(vofa_tx_buf) - 8)
+  141   2              {
+  142   3                  break;
+  143   3              }
+  144   2          }
+  145   1      
+  146   1          vofa_tx_buf[offset++] = '\n';
+  147   1          vofa_wifi_send(vofa_tx_buf, offset);
+  148   1      }
+  149          
+  150          //==================================================================
+  151          //                     简易浮点数解析（替代 atof）
+  152          //==================================================================
+  153          
+  154          /**
+  155           * @brief 解析字符串为浮点数（支持负数、小数）
+  156           * @param  str 字符串指针
+  157           * @param  end 解析结束位置（输出参数，可为 NULL）
+  158           * @return 解析得到的浮点数
+  159           */
+  160          static float vofa_atof(const uint8 *str, const uint8 **end)
+  161          {
+  162   1          float  result = 0.0f;
+  163   1          float  sign = 1.0f;
+  164   1          float  decimal_div = 10.0f;
+  165   1          uint8  has_decimal = 0;
+  166   1          const uint8 *p = str;
+  167   1      
+  168   1          // 跳过空格
+  169   1          while(*p == ' ' || *p == '\t')
+  170   1          {
+  171   2              p++;
+  172   2          }
+  173   1      
+  174   1          // 符号
+  175   1          if(*p == '-')
+  176   1          {
+  177   2              sign = -1.0f;
+  178   2              p++;
+  179   2          }
+  180   1          else if(*p == '+')
+  181   1          {
+  182   2              p++;
+  183   2          }
+  184   1      
+  185   1          // 整数部分和小数部分
+  186   1          while(*p != '\0' && *p != '\n' && *p != '\r' && *p != ',' && *p != '}')
+  187   1          {
+  188   2              if(*p >= '0' && *p <= '9')
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 4   
+
+  189   2              {
+  190   3                  if(has_decimal)
+  191   3                  {
+  192   4                      result += (float)(*p - '0') / decimal_div;
+  193   4                      decimal_div *= 10.0f;
+  194   4                  }
+  195   3                  else
+  196   3                  {
+  197   4                      result = result * 10.0f + (float)(*p - '0');
+  198   4                  }
+  199   3              }
+  200   2              else if(*p == '.')
+  201   2              {
+  202   3                  has_decimal = 1;
+  203   3              }
+  204   2              else
+  205   2              {
+  206   3                  break;
+  207   3              }
+  208   2              p++;
+  209   2          }
+  210   1      
+  211   1          if(end != (const uint8 **)0)
+  212   1          {
+  213   2              *end = p;
+  214   2          }
+  215   1      
+  216   1          return sign * result;
+  217   1      }
+  218          
+  219          //==================================================================
+  220          //                     命令解析与处理
+  221          //==================================================================
+  222          
+  223          /**
+  224           * @brief 解析一行命令并执行
+  225           * @param  line 命令行数据（不含末尾的\n）
+  226           * @param  len  命令行长度
+  227           */
+  228          static void vofa_parse_line(uint8 *line, uint16 len)
+  229          {
+  230   1          uint8  cmd;
+  231   1          uint16 i;
+  232   1          int    param_index;
+  233   1          float  param_value;
+  234   1          const uint8 *end_ptr;
+  235   1      
+  236   1          if(len == 0)
+  237   1          {
+  238   2              return;
+  239   2          }
+  240   1      
+  241   1          cmd = line[0];
+  242   1      
+  243   1          switch(cmd)
+  244   1          {
+  245   2              // 设置参数：$<index>,<value>
+  246   2              case VOFA_CMD_SET:
+  247   2              {
+  248   3                  i = 1;
+  249   3      
+  250   3                  // 跳过空格
+  251   3                  while(i < len && (line[i] == ' ' || line[i] == '\t'))
+  252   3                  {
+  253   4                      i++;
+  254   4                  }
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 5   
+
+  255   3      
+  256   3                  // 解析参数索引
+  257   3                  param_index = 0;
+  258   3                  while(i < len && line[i] >= '0' && line[i] <= '9')
+  259   3                  {
+  260   4                      param_index = param_index * 10 + (line[i] - '0');
+  261   4                      i++;
+  262   4                  }
+  263   3      
+  264   3                  // 跳过空格和逗号
+  265   3                  while(i < len && (line[i] == ' ' || line[i] == ',' || line[i] == '\t'))
+  266   3                  {
+  267   4                      i++;
+  268   4                  }
+  269   3      
+  270   3                  // 解析参数值
+  271   3                  param_value = vofa_atof(&line[i], &end_ptr);
+  272   3      
+  273   3                  // 设置参数
+  274   3                  if(param_index >= 0 && param_index < VOFA_MAX_PARAMS && vofa_params[param_index].used)
+  275   3                  {
+  276   4                      // 限幅
+  277   4                      if(param_value < vofa_params[param_index].min)
+  278   4                      {
+  279   5                          param_value = vofa_params[param_index].min;
+  280   5                      }
+  281   4                      if(param_value > vofa_params[param_index].max)
+  282   4                      {
+  283   5                          param_value = vofa_params[param_index].max;
+  284   5                      }
+  285   4      
+  286   4                      vofa_params[param_index].value = param_value;
+  287   4                      vofa_params[param_index].updated = 1;
+  288   4      
+  289   4                      // 调试输出（可选，调试通过后可注释）
+  290   4                      printf("[VOFA] SET P%d = %.4f\r\n", param_index, param_value);
+  291   4                  }
+  292   3                  else
+  293   3                  {
+  294   4                      printf("[VOFA] ERR: param %d not registered\r\n", param_index);
+  295   4                  }
+  296   3                  break;
+  297   3              }
+  298   2      
+  299   2              // 请求上报参数定义：#
+  300   2              case VOFA_CMD_REPORT_DEF:
+  301   2              {
+  302   3                  vofa_report_params();
+  303   3                  break;
+  304   3              }
+  305   2      
+  306   2              // 请求上报参数值：?
+  307   2              case VOFA_CMD_REPORT_VAL:
+  308   2              {
+  309   3                  vofa_report_values();
+  310   3                  break;
+  311   3              }
+  312   2      
+  313   2              default:
+  314   2                  // 未知命令，忽略
+  315   2                  break;
+  316   2          }
+  317   1      }
+  318          
+  319          /**
+  320           * @brief 处理接收缓冲区，提取完整命令行
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 6   
+
+  321           */
+  322          static void vofa_process_rx(void)
+  323          {
+  324   1          uint16 i;
+  325   1          uint16 line_start;
+  326   1          uint16 line_len;
+  327   1      
+  328   1          // 在缓冲区中查找 '\n'，提取每一行命令
+  329   1          line_start = 0;
+  330   1          for(i = 0; i < vofa_rx_len; i++)
+  331   1          {
+  332   2              if(vofa_rx_buf[i] == '\n')
+  333   2              {
+  334   3                  line_len = i - line_start;
+  335   3      
+  336   3                  // 去掉行尾的 '\r'
+  337   3                  if(line_len > 0 && vofa_rx_buf[line_start + line_len - 1] == '\r')
+  338   3                  {
+  339   4                      line_len--;
+  340   4                  }
+  341   3      
+  342   3                  // 在行尾添加 '\0' 方便处理
+  343   3                  if(line_len > 0)
+  344   3                  {
+  345   4                      vofa_rx_buf[line_start + line_len] = '\0';
+  346   4                      vofa_parse_line(&vofa_rx_buf[line_start], line_len);
+  347   4                  }
+  348   3      
+  349   3                  line_start = i + 1;
+  350   3              }
+  351   2          }
+  352   1      
+  353   1          // 将未处理的数据移到缓冲区开头
+  354   1          if(line_start > 0)
+  355   1          {
+  356   2              if(line_start < vofa_rx_len)
+  357   2              {
+  358   3                  // 还有未处理的数据（没有找到\n的不完整命令）
+  359   3                  for(i = 0; i < vofa_rx_len - line_start; i++)
+  360   3                  {
+  361   4                      vofa_rx_buf[i] = vofa_rx_buf[line_start + i];
+  362   4                  }
+  363   3                  vofa_rx_len = vofa_rx_len - line_start;
+  364   3              }
+  365   2              else
+  366   2              {
+  367   3                  // 所有数据都已处理
+  368   3                  vofa_rx_len = 0;
+  369   3              }
+  370   2          }
+  371   1      }
+  372          
+  373          //==================================================================
+  374          //                          公开 API
+  375          //==================================================================
+  376          
+  377          void my_vofa_init(void)
+  378          {
+  379   1          uint8 i;
+  380   1          // 新增：端口字符串缓存，逐飞socket接口必须传char*字符串
+  381   1          char target_port_str[8];
+  382   1          char local_port_str[8];
+  383   1      
+  384   1          // 初始化参数表
+  385   1          for(i = 0; i < VOFA_MAX_PARAMS; i++)
+  386   1          {
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 7   
+
+  387   2              vofa_params[i].nam[0] = '\0';
+  388   2              vofa_params[i].value = 0.0f;
+  389   2              vofa_params[i].min = 0.0f;
+  390   2              vofa_params[i].max = 0.0f;
+  391   2              vofa_params[i].step = 0.0f;
+  392   2              vofa_params[i].updated = 0;
+  393   2              vofa_params[i].used = 0;
+  394   2          }
+  395   1      
+  396   1          vofa_rx_len = 0;
+  397   1      
+  398   1          // 连接 WiFi
+  399   1          printf("\r\n[VOFA] Connecting WiFi [%s]...\r\n", VOFA_WIFI_SSID);
+  400   1          while(wifi_spi_init((uint8 *)VOFA_WIFI_SSID, (uint8 *)VOFA_WIFI_PASSWORD))
+  401   1          {
+  402   2              printf("[VOFA] WiFi connect failed, retry...\r\n");
+  403   2              system_delay_ms(100);
+  404   2          }
+  405   1      
+  406   1          printf("[VOFA] WiFi connected!\r\n");
+  407   1          printf("[VOFA] module version: %s\r\n", wifi_spi_version);
+  408   1          printf("[VOFA] module mac    : %s\r\n", wifi_spi_mac_addr);
+  409   1          printf("[VOFA] module ip     : %s\r\n", wifi_spi_ip_addr_port);
+  410   1      
+  411   1          // 数字端口转为字符串
+  412   1          sprintf(target_port_str, "%d", VOFA_TARGET_PORT);
+  413   1          sprintf(local_port_str, "%d", VOFA_LOCAL_PORT);
+  414   1      
+  415   1          // 连接 VOFA+ TCP 服务器
+  416   1          printf("[VOFA] Connecting VOFA+ server %s:%d...\r\n", VOFA_TARGET_IP, VOFA_TARGET_PORT);
+  417   1          while(wifi_spi_socket_connect(
+  418   1              "TCP", 
+  419   1              VOFA_TARGET_IP, 
+  420   1              target_port_str, 
+  421   1              local_port_str))
+  422   1          {
+  423   2              printf("[VOFA] Connect server failed, retry...\r\n");
+  424   2              system_delay_ms(100);
+  425   2          }
+  426   1      
+  427   1          printf("[VOFA] VOFA+ connected! Ready to go.\r\n");
+  428   1          
+  429   1          // 强制上报参数定义，移除条件编译
+  430   1          system_delay_ms(500);  // 增加延时确保连接稳定
+  431   1          vofa_report_params();
+  432   1      }
+  433          
+  434          void my_vofa_process(void)
+  435          {
+  436   1          uint16 recv_len;
+  437   1          uint16 free_len;
+  438   1      
+  439   1          // 接收数据
+  440   1          free_len = VOFA_RX_BUF_SIZE - vofa_rx_len;
+  441   1          if(free_len > 0)
+  442   1          {
+  443   2              recv_len = vofa_wifi_receive(&vofa_rx_buf[vofa_rx_len], free_len);
+  444   2      
+  445   2              if(recv_len > 0)
+  446   2              {
+  447   3                  vofa_rx_len += recv_len;
+  448   3      
+  449   3                  // 如果缓冲区满了还没找到\n，清空缓冲区防止死锁
+  450   3                  if(vofa_rx_len >= VOFA_RX_BUF_SIZE)
+  451   3                  {
+  452   4                      vofa_rx_len = 0;
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 8   
+
+  453   4                  }
+  454   3                  else
+  455   3                  {
+  456   4                      // 解析命令
+  457   4                      vofa_process_rx();
+  458   4                  }
+  459   3              }
+  460   2          }
+  461   1          else
+  462   1          {
+  463   2              // 缓冲区满，清空
+  464   2              vofa_rx_len = 0;
+  465   2          }
+  466   1      }
+  467          
+  468          void vofa_send_wave(float *dat, uint8 channel_num)
+  469          {
+  470   1      #if VOFA_USE_JUSTFLOAT
+  471   1          vofa_send_justfloat(dat, channel_num);
+  472   1      #else
+                   vofa_send_firewater(dat, channel_num);
+               #endif
+  475   1      }
+  476          
+  477          void vofa_register_param(uint8 index, const char *nam, float value, float min, float max, float step)
+  478          {
+  479   1          uint8 i;
+  480   1      
+  481   1          if(index >= VOFA_MAX_PARAMS)
+  482   1          {
+  483   2              return;
+  484   2          }
+  485   1      
+  486   1          // 拷贝名称
+  487   1          for(i = 0; i < 15 && nam[i] != '\0'; i++)
+  488   1          {
+  489   2              vofa_params[index].nam[i] = nam[i];
+  490   2          }
+  491   1          vofa_params[index].nam[i] = '\0';
+  492   1      
+  493   1          vofa_params[index].value = value;
+  494   1          vofa_params[index].min = min;
+  495   1          vofa_params[index].max = max;
+  496   1          vofa_params[index].step = step;
+  497   1          vofa_params[index].updated = 0;
+  498   1          vofa_params[index].used = 1;
+  499   1      
+  500   1          printf("[VOFA] Registered P%d: %s = %.4f [%.4f, %.4f] step=%.4f\r\n",
+  501   1                 index, vofa_params[index].nam, value, min, max, step);
+  502   1      }
+  503          
+  504          float vofa_get_param(uint8 index)
+  505          {
+  506   1          if(index >= VOFA_MAX_PARAMS || !vofa_params[index].used)
+  507   1          {
+  508   2              return 0.0f;
+  509   2          }
+  510   1          return vofa_params[index].value;
+  511   1      }
+  512          
+  513          void vofa_set_param(uint8 index, float value)
+  514          {
+  515   1          if(index >= VOFA_MAX_PARAMS || !vofa_params[index].used)
+  516   1          {
+  517   2              return;
+  518   2          }
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 9   
+
+  519   1      
+  520   1          // 限幅
+  521   1          if(value < vofa_params[index].min)
+  522   1          {
+  523   2              value = vofa_params[index].min;
+  524   2          }
+  525   1          if(value > vofa_params[index].max)
+  526   1          {
+  527   2              value = vofa_params[index].max;
+  528   2          }
+  529   1      
+  530   1          vofa_params[index].value = value;
+  531   1      }
+  532          
+  533          uint8 vofa_param_updated(uint8 index)
+  534          {
+  535   1          uint8 flag;
+  536   1      
+  537   1          if(index >= VOFA_MAX_PARAMS || !vofa_params[index].used)
+  538   1          {
+  539   2              return 0;
+  540   2          }
+  541   1      
+  542   1          flag = vofa_params[index].updated;
+  543   1          vofa_params[index].updated = 0;
+  544   1          return flag;
+  545   1      }
+  546          
+  547          void vofa_report_params(void)
+  548          {
+  549   1          uint8 i;
+  550   1          uint16 offset;
+  551   1      
+  552   1          // 发送分隔标识，方便 VOFA+ 文本面板识别
+  553   1          offset = (uint16)sprintf((char *)vofa_text_buf, "=== VOFA+ Param Definition ===\n");
+  554   1          vofa_wifi_send(vofa_text_buf, offset);
+  555   1      
+  556   1          for(i = 0; i < VOFA_MAX_PARAMS; i++)
+  557   1          {
+  558   2              if(vofa_params[i].used)
+  559   2              {
+  560   3                  // 格式：#<index>,<name>,<value>,<min>,<max>,<step>\n
+  561   3                  offset = (uint16)sprintf((char *)vofa_text_buf,
+  562   3                      "#%d,%s,%.4f,%.4f,%.4f,%.4f\n",
+  563   3                      i, vofa_params[i].nam, vofa_params[i].value,
+  564   3                      vofa_params[i].min, vofa_params[i].max, vofa_params[i].step);
+  565   3                  vofa_wifi_send(vofa_text_buf, offset);
+  566   3              }
+  567   2          }
+  568   1      
+  569   1          offset = (uint16)sprintf((char *)vofa_text_buf,
+  570   1              "Usage: send $<index>,<value>\\n to set param\n");
+  571   1          vofa_wifi_send(vofa_text_buf, offset);
+  572   1      }
+  573          
+  574          void vofa_report_values(void)
+  575          {
+  576   1          uint8 i;
+  577   1          uint16 offset;
+  578   1      
+  579   1          offset = (uint16)sprintf((char *)vofa_text_buf, "=== VOFA+ Param Values ===\n");
+  580   1          vofa_wifi_send(vofa_text_buf, offset);
+  581   1      
+  582   1          for(i = 0; i < VOFA_MAX_PARAMS; i++)
+  583   1          {
+  584   2              if(vofa_params[i].used)
+C251 COMPILER V5.60.0,  my_vofa                                                            08/11/26  15:04:37  PAGE 10  
+
+  585   2              {
+  586   3                  offset = (uint16)sprintf((char *)vofa_text_buf,
+  587   3                      "P%d %s = %.4f\n", i, vofa_params[i].nam, vofa_params[i].value);
+  588   3                  vofa_wifi_send(vofa_text_buf, offset);
+  589   3              }
+  590   2          }
+  591   1      }
+*** WARNING C174 IN LINE 114 OF my_vofa.c: 'vofa_send_firewater': unreferenced 'static' function
+*** WARNING C183 IN LINE 105 OF my_vofa.c: dead assignment eliminated
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+  code size            =    ------     ------
+  ecode size           =      2868     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =       814         42
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+  hconst size          =       629     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  2 WARNING(S),  0 ERROR(S)

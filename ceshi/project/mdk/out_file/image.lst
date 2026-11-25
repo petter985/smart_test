@@ -1,0 +1,2116 @@
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE image
+OBJECT MODULE PLACED IN .\out_file\image.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE image.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR(.
+                    -.\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\co
+                    -de;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_file
+                    -\image.lst) OBJECT(.\out_file\image.obj) 
+
+stmt  level    source
+
+    1          #include "image.h"
+    2          #include "string.h"
+    3          uint8 diuxian_sum = 0;
+    4          uint8 MID_W=91;/*改这个下面3个都要改动！！！！*/
+    5          float final_mid_line = 91;
+    6          uint8 start_col_for_search = 91;  /* 搜线起始列（由最长白列决定） */
+    7          uint8 last_mid_line = 91;
+    8          
+    9          uint8 get_distance = 0;
+   10          uint8 zebra_center_x = 91;      /* 斑马线中心横坐标 */
+   11          uint8 zebra_center_valid = 0;   /* 斑马线中心有效标志 */
+   12          uint8 type2=0;//左环岛避免越界的操作
+   13          #define LIMIT_AB(value, min, max)  ((value)<(min) ? (min) : ((value)>(max) ? (max) : (value)))
+   14          #define ABS_WHITE_MUL       13.5
+   15          #define ABS_BLACK_MUL       6.5
+   16          #define BLACKPOINT          50
+   17          #define DIFF_RATIO_THRESHOLD 20
+   18          #define SEARCH_OFFSET       5
+   19          #define STOP_BLACK_ROWS     3
+   20          
+   21          void Calculate_Offset_1(void);
+   22          
+   23          int turn_proline=MT9V03X_H-50;//最终前瞻行***************************************************************
+             -*******
+   24          
+   25          uint8 r_lose_value = 0;
+   26          uint8 l_lose_value = 0;
+   27          
+   28          uint8 search_line_end = 20;
+   29          uint8 l_line_x[MT9V03X_H] = {0};
+   30          uint8 r_line_x[MT9V03X_H] = {0};
+   31          
+   32          uint8 kuan[MT9V03X_H];
+   33          uint8 m_line_x[MT9V03X_H];
+   34          uint8 r_line_y[MT9V03X_H], l_line_y[MT9V03X_H];
+   35          /* uint8 r_line_x[MT9V03X_H], l_line_x[MT9V03X_H]; */
+   36          uint8 r_second_line_x[MT9V03X_H], l_second_line_x[MT9V03X_H];
+   37          uint8 m_second_line_x[MT9V03X_H];
+   38          /* uint8 r_lose_value=0, l_lose_value=0; */
+   39          uint8 r_search_flag[MT9V03X_H], l_search_flag[MT9V03X_H];
+   40          uint8 height, r_width, l_width;
+   41          uint8 r_losemax,l_losemax;
+   42          
+   43          uint8 reference_point = 128;
+   44          uint8 white_max_point = 200;
+   45          uint8 white_min_point = 70;
+   46          
+   47          //uint8 image_01[MT9V03X_H][MT9V03X_W];
+   48          /* ==================== 逆透视矩阵与函数 ==================== */
+   49          double change_un_Mat[3][3] = {
+   50              { 0.043237, -0.036011, 0.253624},
+   51              { 0.003335, -0.002476, 0.933728},
+   52              { 0.000051, -0.000360, 0.038433}
+   53          };
+   54          
+   55          #define BIRD_TRACK_WIDTH  38.0f   /* 鸟瞰图赛道宽度，需根据实际标定 */
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 2   
+
+   56          
+   57          void inverse_perspective(float col, float row, float *x, float *y)
+   58          {
+   59   1          float u, v, w;
+   60   1          u = change_un_Mat[0][0] * col + change_un_Mat[0][1] * row + change_un_Mat[0][2];
+   61   1          v = change_un_Mat[1][0] * col + change_un_Mat[1][1] * row + change_un_Mat[1][2];
+   62   1          w = change_un_Mat[2][0] * col + change_un_Mat[2][1] * row + change_un_Mat[2][2];
+   63   1          *x = u / w;
+   64   1          *y = v / w;
+   65   1      }
+   66          
+   67          /**
+   68           * @brief 用右边界逆透视推算横向偏差
+   69           */
+   70          float get_bird_error_from_right(void)
+   71          {
+   72   1          uint8 row1 = MT9V03X_H - 37;
+   73   1          uint8 row2 = MT9V03X_H - 40;
+   74   1          float bird_x1, bird_y1, bird_x2, bird_y2, bird_Mx, bird_My;
+   75   1          float dx, dy, len;
+   76   1          float normal_x, normal_y;
+   77   1          float half_width = BIRD_TRACK_WIDTH / 2.0f;
+   78   1          float bird_Cx, bird_Cy;
+   79   1      
+   80   1          if (r_line_x[row1] == MT9V03X_W - 1 || r_line_x[row2] == MT9V03X_W - 1)
+   81   1              return 0.0f;
+   82   1      
+   83   1          inverse_perspective((float)r_line_x[row1], (float)row1, &bird_x1, &bird_y1);
+   84   1          inverse_perspective((float)r_line_x[row2], (float)row2, &bird_x2, &bird_y2);
+   85   1          inverse_perspective((float)MID_W, (float)row1, &bird_Mx, &bird_My);
+   86   1      
+   87   1          dx = bird_x2 - bird_x1;
+   88   1          dy = bird_y2 - bird_y1;
+   89   1          len = (float)sqrt((double)(dx*dx + dy*dy));
+   90   1          if (len < 0.01f) return 0.0f;
+   91   1      
+   92   1          normal_x = -dy / len;
+   93   1          normal_y =  dx / len;
+   94   1      
+   95   1          bird_Cx = bird_x1 - half_width * normal_x;
+   96   1          bird_Cy = bird_y1 - half_width * normal_y;
+   97   1      
+   98   1          return (bird_Cx - bird_Mx) * normal_x + (bird_Cy - bird_My) * normal_y;
+   99   1      }
+  100          
+  101          /**
+  102           * @brief 用左边界逆透视推算横向偏差
+  103           */
+  104          float get_bird_error_from_left(void)
+  105          {
+  106   1          uint8 row1 = MT9V03X_H - 37;
+  107   1          uint8 row2 = MT9V03X_H - 40;
+  108   1          float bird_x1, bird_y1, bird_x2, bird_y2, bird_Mx, bird_My;
+  109   1          float dx, dy, len;
+  110   1          float normal_x, normal_y;
+  111   1          float half_width = BIRD_TRACK_WIDTH / 2.0f;
+  112   1          float bird_Cx, bird_Cy;
+  113   1      
+  114   1          if (l_line_x[row1] == 0 || l_line_x[row2] == 0)
+  115   1              return 0.0f;
+  116   1      
+  117   1          inverse_perspective((float)l_line_x[row1], (float)row1, &bird_x1, &bird_y1);
+  118   1          inverse_perspective((float)l_line_x[row2], (float)row2, &bird_x2, &bird_y2);
+  119   1          inverse_perspective((float)MID_W, (float)row1, &bird_Mx, &bird_My);
+  120   1      
+  121   1          dx = bird_x2 - bird_x1;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 3   
+
+  122   1          dy = bird_y2 - bird_y1;
+  123   1          len = (float)sqrt((double)(dx*dx + dy*dy));
+  124   1          if (len < 0.01f) return 0.0f;
+  125   1      
+  126   1          normal_x =  dy / len;
+  127   1          normal_y = -dx / len;
+  128   1      
+  129   1          bird_Cx = bird_x1 + half_width * normal_x;
+  130   1          bird_Cy = bird_y1 + half_width * normal_y;
+  131   1      
+  132   1          return (bird_Cx - bird_Mx) * normal_x + (bird_Cy - bird_My) * normal_y;
+  133   1      }
+  134          uint8 kuandu_saidao[MT9V03X_H - 1] = {
+  135              170, 169, 168, 167, 167, 166, 165, 165, 164, 163,
+  136              162, 162, 161, 160, 160, 159, 158, 157, 157, 156,
+  137              155, 154, 150, 149, 147, 145, 144, 142, 141, 139,
+  138              138, 136, 134, 133, 132, 130, 128, 126, 126, 124,
+  139              122, 120, 119, 117, 116, 114, 113, 111, 109, 107,
+  140              105, 105, 103, 101, 99, 98, 96, 94, 92, 91,
+  141              90, 88, 86, 84, 83, 81, 79, 78, 76, 75,
+  142              73, 71, 69, 68, 66, 64, 63, 61, 60, 58,
+  143              56, 54, 53, 51, 49, 48, 46, 43, 41, 42,
+  144              39, 38, 36, 34, 33, 30, 29, 31,
+  145              30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+  146              20, 19, 18, 17, 16, 15, 14, 13, 12
+  147          };
+  148          struct ROAD_TYPE road_type = {
+  149              0,  /* straight */
+  150              0,  /*short_straight*/
+  151              0,  /* bend     */
+  152              0,  /* Ramp     */
+  153              0,  /* Cross    */
+  154              0,  /* LeftCirque    */
+  155              0,  /* RightCirque   */
+  156              0,  /* ruwan         */
+  157              0   /* banmaxian     */
+  158          };
+  159          
+  160          void clean()
+  161          {
+  162   1              memset(l_line_x, 0, 119);
+  163   1              memset(r_line_x, MT9V03X_W-1, 119);
+  164   1              memset(m_line_x, 91, 119);
+  165   1              memset(l_search_flag, 0, 119);
+  166   1              memset(r_search_flag, 0, 119);
+  167   1      }
+  168          void get_mid_line()//计算中值函数
+  169          {
+  170   1              int i;
+  171   1              if(type2){
+  172   2                      for (i = MT9V03X_H - 1; i>search_line_end; i--)
+  173   2                              { 
+  174   3                                               m_line_x[i] = r_line_x[i] - kuandu_saidao[MT9V03X_H - 1 - i]*0.5-8;
+  175   3                              }
+  176   2                              return;
+  177   2              }
+  178   1              for (i = MT9V03X_H - 1; i>search_line_end; i--)
+  179   1                      { 
+  180   2                                      m_line_x[i] = (l_line_x[i] + r_line_x[i]) / 2;
+  181   2                      }
+  182   1      }
+  183          
+  184          #define JIUJI_EXIT_DISTANCE  240.0f   /* 救急退出距离，根据实际调整（建议80~150） */
+  185          
+  186          //变中值
+  187          void transfor_mid(void)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 4   
+
+  188          {
+  189   1          /* 救急状态标志：0=无，1=左侧丢线救急，2=右侧丢线救急 */
+  190   1          static uint8 jiuji_flag = 0;
+  191   1          
+  192   1          uint8 r_diuxian;
+  193   1          uint8 l_diuxian;
+  194   1          
+  195   1          /* 0. 如果处于环岛/十字/斑马线，强制清零救急状态（防止残留干扰） */
+  196   1          if (road_type.RightCirque || road_type.LeftCirque || 
+  197   1              road_type.Cross || road_type.banmaxian)
+  198   1          {
+  199   2              jiuji_flag = 0;
+  200   2              /* 注意：不清除 get_distance/annulus_s1，由元素处理函数自行管理 */
+  201   2          }
+  202   1      
+  203   1          /* 1. 处理右环岛 */
+  204   1          if (road_type.RightCirque) 
+  205   1          {
+  206   2              if (huandao_stage == 2) { MID_W = 82; return; }
+  207   2              if (huandao_stage == 3) { MID_W = 76; return; }
+  208   2              if (huandao_stage == 5) { MID_W = 83; return; }
+  209   2              if (huandao_stage == 6) { MID_W = 91; return; }
+  210   2          }
+  211   1      
+  212   1          /* 2. 处理左环岛 */
+  213   1          if (road_type.LeftCirque) 
+  214   1          {
+  215   2              if (huandao_stage == 2) { MID_W = 100; return; }
+  216   2              if (huandao_stage == 3) { MID_W = 106; return; }
+  217   2              if (huandao_stage == 5) { MID_W = 99;  return; }
+  218   2              if (huandao_stage == 6) { MID_W = 91;  return; }
+  219   2          }
+  220   1      
+  221   1          if (road_type.bend)
+  222   1          {
+  223   2              if (jiuji_flag != 0)
+  224   2              {
+  225   3                  if (annulus_s1 > JIUJI_EXIT_DISTANCE)
+  226   3                  {
+  227   4                      jiuji_flag = 0;
+  228   4                      get_distance = 0;
+  229   4                      annulus_s1 = 0;
+  230   4                  }
+  231   3                  else
+  232   3                  {
+  233   4                      if (jiuji_flag == 1)
+  234   4                          MID_W = 145;  
+  235   4                      else
+  236   4                          MID_W = 35;   
+  237   4                      return;
+  238   4                  }
+  239   3              }
+  240   2              if (road_type.bend)
+  241   2              {
+  242   3                  Diuxian_weizhi_test(2, MT9V03X_H - 3, MT9V03X_H - 17);
+  243   3                  r_diuxian = diuxian_sum;
+  244   3                  Diuxian_weizhi_test(1, MT9V03X_H - 3, MT9V03X_H - 17);
+  245   3                  l_diuxian = diuxian_sum;
+  246   3                  
+  247   3      
+  248   3                  if (r_diuxian > 13 && l_diuxian < 2 && search_line_end > MT9V03X_H - 42)
+  249   3                  {
+  250   4                      jiuji_flag = 2;         
+  251   4                      get_distance = 1;        
+  252   4                      annulus_s1 = 0;          
+  253   4                      MID_W = 35;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 5   
+
+  254   4                      return;
+  255   4                  }
+  256   3                  else if (l_diuxian > 13 && r_diuxian < 2 && search_line_end > MT9V03X_H - 42)
+  257   3                  {
+  258   4                      jiuji_flag = 1;          
+  259   4                      get_distance = 1;         
+  260   4                      annulus_s1 = 0;           
+  261   4                      MID_W = 145;
+  262   4                      return;
+  263   4                  }
+  264   3              }
+  265   2          }
+  266   1          /* 4. 默认值（非环岛/非救急，或救急已退出） */
+  267   1          MID_W = 91;
+  268   1      }
+  269          
+  270          
+  271          //图像处理主函数
+  272          void image_process(void)
+  273          {    
+  274   1          if (mt9v03x_finish_flag == 1)
+  275   1          {
+  276   2              //Transfer_Camera();
+  277   2              mt9v03x_finish_flag = 0;
+  278   2              clean();//把上次搜线结果归零，避免影响环岛等处理
+  279   2                              
+  280   2              //ips200_show_int8(0, 0, white_min_point);
+  281   2                      
+  282   2              Search_edge();
+  283   2              Element_Test();
+  284   2                                
+  285   2              Element_Handle();
+  286   2                      get_mid_line();
+  287   2                      qulv_characteristic();//曲率计算，辅助路况判断
+  288   2                      transfor_mid();//变中线
+  289   2                      //turn_pro();//变前瞻
+  290   2                      Calculate_Offset_1();
+  291   2                      Check_Out();
+  292   2              if (flag.image_show)
+  293   2              {
+  294   3                  //Blacking();
+  295   3                  //ips200_show_int8(0, 0, final_mid_line - MID_W);
+  296   3              }
+  297   2          }
+  298   1      }
+  299          
+  300          uint16 distance_L_Cross_out = 0;
+  301          uint16 distance_R_Cross_out = 0;
+  302          uint8 flag_L_shizi_R_turn = 0;
+  303          uint8 flag_R_shizi_L_turn = 0;
+  304          float annulus_s1 = 0;
+  305          int16 jiaodu_jifen = 0;
+  306          int16 annulus_jinku_s = 0;
+  307          
+  308          
+  309          
+  310          int16 l_line_qulv = 0, r_line_qulv = 0;
+  311          /****************************************************元素检测主函数**************************************
+             -*********************/
+  312          void Element_Test(void)
+  313          {       
+  314   1              uint8 right_zhibian=check_zhibian(2);
+  315   1              uint8 left_zhibian=check_zhibian(1);
+  316   1              uint8 right_has_circle_point=check_circle_jump_point(2);
+  317   1              uint8 left_has_circle_point=check_circle_jump_point(1);
+  318   1              //检测斑马线
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 6   
+
+  319   1              zebra_test();
+  320   1      
+  321   1          //检测右环岛
+  322   1              /*
+  323   1          if (length > 98 && r_lose_value >= 18 && l_lose_value < 20
+  324   1              && left_zhibian && right_has_circle_point
+  325   1                      &&!right_zhibian&&!left_has_circle_point)
+  326   1          {
+  327   1              if (road_type.RightCirque == 0)
+  328   1              {
+  329   1                  road_type.RightCirque = 1;
+  330   1                  road_type.straight = 0;
+  331   1                  road_type.bend = 0;
+  332   1              }
+  333   1          }*/
+  334   1              //检测左环岛
+  335   1              /*if (length > 98 && l_lose_value >= 18 && r_lose_value < 20
+  336   1                      && !left_zhibian && !right_has_circle_point
+  337   1                      && right_zhibian&&left_has_circle_point)
+  338   1          {
+  339   1              if (road_type.LeftCirque == 0)
+  340   1              {
+  341   1                  road_type.LeftCirque = 1;
+  342   1                  road_type.straight = 0;
+  343   1                  road_type.bend = 0;
+  344   1              }
+  345   1          }*/
+  346   1               //检测十字
+  347   1              if(!road_type.RightCirque&&!road_type.LeftCirque)
+  348   1         if(length > 95 && r_lose_value >18 && l_lose_value > 18
+  349   1              &&!right_zhibian
+  350   1              &&!left_zhibian) {
+  351   2               road_type.Cross = 1;
+  352   2               road_type.straight = 0;
+  353   2               road_type.bend = 0;
+  354   2          }
+  355   1      }
+  356          
+  357          //变前瞻
+  358          void turn_pro()
+  359          {
+  360   1                      if(road_type.Cross){
+  361   2                                      turn_proline=120-48;
+  362   2                              if(search_line_end>turn_proline-7)
+  363   2                                      turn_proline=search_line_end;
+  364   2                                      return;
+  365   2                      }
+  366   1                      if(road_type.straight||road_type.ruwan){
+  367   2                                      turn_proline=120-65;
+  368   2                              if(search_line_end>turn_proline-7)
+  369   2                                      turn_proline=search_line_end;
+  370   2                                      return;
+  371   2                      }
+  372   1                      
+  373   1                      if(road_type.banmaxian){
+  374   2                                      turn_proline=120-70;
+  375   2                                      return;
+  376   2                      }
+  377   1                      if(road_type.LeftCirque||road_type.RightCirque){
+  378   2                                      turn_proline=120-45;
+  379   2                                      return;
+  380   2                      }
+  381   1      
+  382   1                      if(road_type.bend){
+  383   2                                      turn_proline=120-48;
+  384   2                              if(search_line_end>turn_proline-6)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 7   
+
+  385   2                                      turn_proline=search_line_end;
+  386   2                              return;
+  387   2                      }
+  388   1                      turn_proline=120-50;
+  389   1                      if(search_line_end>turn_proline-6)
+  390   1                                      turn_proline=search_line_end;
+  391   1      }
+  392          
+  393          /*********************************************元素处理主函数*********************************************
+             -***************/
+  394          void Element_Handle(void)
+  395          {
+  396   1              if (road_type.banmaxian)
+  397   1          {
+  398   2              Handle_Zebra();
+  399   2              return;              /* 跳过其他元素，保持当前方向 */
+  400   2          }
+  401   1          if (road_type.LeftCirque)
+  402   1          {
+  403   2              Handle_Left_Cirque();
+  404   2          }
+  405   1          else if (road_type.RightCirque)
+  406   1          {
+  407   2              Handle_Right_Cirque();
+  408   2          }
+  409   1                      
+  410   1      
+  411   1          if (road_type.Cross)
+  412   1          {
+  413   2              Handle_Cross();
+  414   2                                      
+  415   2          }
+  416   1      
+  417   1          //速度决策
+  418   1         
+  419   1      }
+  420          
+  421          
+  422          void Transfer_Camera(void)
+  423          {
+  424   1          //memcpy(image_01, mt9v03x_image, MT9V03X_IMAGE_SIZE);
+  425   1      }
+  426          
+  427          /***********************************************************END******************************************
+             -***********************/
+  428          
+  429          
+  430          /****************************************************元素处理辅助函数************************************
+             -**********/
+  431          
+  432          void qulv_characteristic(void)//对弯道，入弯，直道的检测函数
+  433          {
+  434   1              
+  435   1          int qulv_saver[20] = { 0 };
+  436   1          int k = 0;
+  437   1          uint8 i, j;
+  438   1          int qulv_left, qulv_right;
+  439   1          int jin_qu = 0, yuan_qu = 0;
+  440   1          int max_value = 0, max_value_position = 0;
+  441   1          int max_k = 0;
+  442   1      
+  443   1          /* 非普通赛道不判断 */
+  444   1          if (road_type.Cross || road_type.LeftCirque || road_type.RightCirque)
+  445   1          {
+  446   2              road_type.straight = 0;
+  447   2              road_type.ruwan = 0;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 8   
+
+  448   2              road_type.bend = 0;
+  449   2              return;
+  450   2          }
+  451   1      
+  452   1          /* 计算曲率窗口 */
+  453   1          for (i = search_line_end + 10; i < MT9V03X_H - 6; i += 4)
+  454   1          {
+  455   2              qulv_left = 0;
+  456   2              qulv_right = 0;
+  457   2              for (j = i; j < i + 5; j++)
+  458   2              {
+  459   3                  if (m_line_x[j] > m_line_x[j + 1])
+  460   3                      qulv_right += m_line_x[j] - m_line_x[j + 1];
+  461   3                  else if (m_line_x[j + 1] > m_line_x[j])
+  462   3                      qulv_left += m_line_x[j + 1] - m_line_x[j];
+  463   3              }
+  464   2              qulv_saver[k++] = int_abs(qulv_right - qulv_left);
+  465   2              if (k >= 20) break;
+  466   2          }
+  467   1      
+  468   1          if (k < 3) return;
+  469   1      
+  470   1          /* 近处和远处曲率 */
+  471   1          for (i = 0; i < k / 2; i++)
+  472   1              yuan_qu += qulv_saver[i];
+  473   1          for (i = k / 2; i < k; i++)
+  474   1              jin_qu += qulv_saver[i];
+  475   1      
+  476   1          /* 找最大曲率及位置、最大变化率 */
+  477   1          for (i = 0; i < k - 1; i++)
+  478   1          {
+  479   2              if (qulv_saver[i + 1] > max_value)
+  480   2              {
+  481   3                  max_value = qulv_saver[i + 1];
+  482   3                  max_value_position = i + 1;
+  483   3              }
+  484   2              if (int_abs(qulv_saver[i + 1] - qulv_saver[i]) > max_k)
+  485   2                  max_k = int_abs(qulv_saver[i + 1] - qulv_saver[i]);
+  486   2          }
+  487   1      
+  488   1          /* === 判断赛道类型 === */
+  489   1      
+  490   1                      /* 入弯优先：近处曲率明显小于远处（还在入弯过程中） */
+  491   1                      if (yuan_qu > jin_qu * 2 &&      // 远处是近处的2倍以上（入弯特征）
+  492   1                                      yuan_qu > 15 &&              // 远处确实有弯
+  493   1                                      jin_qu < 15 &&               // 近处还没完全弯
+  494   1                                      max_k > 3 &&                 // 曲率在变化
+  495   1                                      search_line_end >= 28)
+  496   1                      {
+  497   2                                      road_type.ruwan = 1;
+  498   2                                      road_type.straight = 0;
+  499   2                                      road_type.bend = 0;
+  500   2                      }
+  501   1                      /* 弯道：近处曲率已经接近或超过远处的一半（真正进入弯道） */
+  502   1                      else if ((search_line_end >= 35) ||
+  503   1                                                       (search_line_end < 35 && jin_qu + yuan_qu > 25 && jin_qu >= 12 && yuan_qu <= jin_qu * 3))
+  504   1                      {
+  505   2                                      road_type.bend = 1;
+  506   2                                      road_type.straight = 0;
+  507   2                                      road_type.ruwan = 0;
+  508   2                      }
+  509   1                      /* 直道 */
+  510   1                      else if (search_line_end <= 25 && max_value <= 3 && max_k <= 2)
+  511   1                      {
+  512   2                                      road_type.straight = 1;
+  513   2                                      road_type.ruwan = 0;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 9   
+
+  514   2                                      road_type.bend = 0;
+  515   2                      }
+  516   1                      else
+  517   1                      {
+  518   2                                      road_type.straight = 0;
+  519   2                                      road_type.ruwan = 0;
+  520   2                                      road_type.bend = 0;
+  521   2                      }
+  522   1                              /*printf("=== 曲率调试 ===\n");
+  523   1                              printf("k=%d, jin_qu=%d, yuan_qu=%d, total=%d\n", k, jin_qu, yuan_qu, jin_qu+yuan_qu);
+  524   1                              printf("max_value=%d, position=%d, max_k=%d\n", max_value, max_value_position, max_k);
+  525   1                              printf("search_line_end=%d\n", search_line_end);
+  526   1                              printf("曲率数组: ");
+  527   1                              for(i=0; i<k; i++) printf("%d ", qulv_saver[i]);
+  528   1                              printf("\n\n");*/
+  529   1                      }
+  530          
+  531          /*******************************搜线函数***********************************************/
+  532          
+  533          uint8 length = 0;
+  534          void Mid_Col(uint8 index[][MT9V03X_W])
+  535          {
+  536   1          uint8 col_list[3] = { 48, 94, 140 };
+  537   1          uint8 i;
+  538   1          uint8 row;
+  539   1          uint8 best_col = MID_W;
+  540   1          uint8 best_len = 0;
+  541   1          uint8 best_end_row = 10;
+  542   1          uint8 white_len;
+  543   1          uint8 black_count;
+  544   1          uint8 is_mid_col;
+  545   1          uint8 min_row;
+  546   1      
+  547   1          for (i = 0; i < 3; i++)
+  548   1          {
+  549   2              uint8 col = col_list[i];
+  550   2              is_mid_col = (col == 94);
+  551   2      
+  552   2              white_len = 0;
+  553   2              black_count = 0;
+  554   2      
+  555   2              /* 中间列+斑马线：留62行余量，保证能安全访问 row-52 */
+  556   2              min_row = (is_mid_col && road_type.banmaxian) ? 62 : 10;
+  557   2      
+  558   2              for (row = MT9V03X_H - 1; row > min_row; row--)
+  559   2              {
+  560   3                  if (index[row][col] > white_min_point)
+  561   3                  {
+  562   4                      white_len++;
+  563   4                      black_count = 0;
+  564   4                  }
+  565   3                  else
+  566   3                  {
+  567   4                      black_count++;
+  568   4                      if (black_count >= 3)
+  569   4                      {
+  570   5                          /* 中间列+斑马线：向上偏移50行验证 */
+  571   5                          if (is_mid_col && road_type.banmaxian &&
+  572   5                              row > 62 &&
+  573   5                              index[row - 50][col] < white_min_point &&
+  574   5                              index[row - 51][col] < white_min_point &&
+  575   5                              index[row - 52][col] < white_min_point)
+  576   5                          {
+  577   6                              break;
+  578   6                          }
+  579   5                          else if (is_mid_col && road_type.banmaxian)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 10  
+
+  580   5                          {
+  581   6                              black_count = 0;
+  582   6                              continue;
+  583   6                          }
+  584   5                          break;
+  585   5                      }
+  586   4                  }
+  587   3              }
+  588   2      
+  589   2              if (white_len > best_len)
+  590   2              {
+  591   3                  best_len = white_len;
+  592   3                  best_col = col;
+  593   3                  best_end_row = row + 3;
+  594   3              }
+  595   2          }
+  596   1      
+  597   1          length = best_len;
+  598   1          search_line_end = best_end_row;
+  599   1          start_col_for_search = best_col;
+  600   1      }
+  601          void get_reference_point(const uint8 *image)
+  602          {
+  603   1          uint8 row, col;
+  604   1          uint16 valid_count = 0;
+  605   1          uint16 sum = 0;
+  606   1          uint8 pixel;
+  607   1          uint8 start_row = MT9V03X_H - 10;
+  608   1          uint8 end_row   = MT9V03X_H - 1;
+  609   1          uint8 start_col = 90;
+  610   1          uint8 end_col   = 100;
+  611   1      
+  612   1          for (row = start_row; row <= end_row; row++)
+  613   1          {
+  614   2              for (col = start_col; col <= end_col; col++)
+  615   2              {
+  616   3                  pixel = image[row * MT9V03X_W + col];
+  617   3                  if (pixel > 30)
+  618   3                  {
+  619   4                      sum += pixel;
+  620   4                      valid_count++;
+  621   4                  }
+  622   3              }
+  623   2          }
+  624   1      
+  625   1          if (valid_count > 0)
+  626   1              reference_point = (uint8)(sum / valid_count);
+  627   1          else
+  628   1              reference_point = 128;
+  629   1      
+  630   1          white_max_point = (uint8)LIMIT_AB((int)reference_point * ABS_WHITE_MUL / 10, BLACKPOINT, 255);
+  631   1          white_min_point = (uint8)LIMIT_AB((int)reference_point * ABS_BLACK_MUL / 10, BLACKPOINT, 255);
+  632   1      }
+  633          
+  634          uint8 search_left_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start)
+  635          {
+  636   1          uint8 col;
+  637   1          uint8 *p_row = &index[row][0];
+  638   1          uint8 cur, left2;
+  639   1      
+  640   1          for (col = start; col > 3; col--)
+  641   1          {
+  642   2              cur   = p_row[col];
+  643   2              left2 = p_row[col - 2];
+  644   2      
+  645   2              // 优先级1：参考点（左边点）是绝对白 → 还在赛道内，跳过
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 11  
+
+  646   2              if (left2 > white_max_point)
+  647   2              {
+  648   3                  continue;
+  649   3              }
+  650   2      
+  651   2              // 优先级2：参考点是绝对黑 → 这就是边界，返回参考点位置
+  652   2              if (left2 < white_min_point)
+  653   2              {
+  654   3                                              if(cur<white_min_point)
+  655   3                                              {
+  656   4                                                      return 1;
+  657   4                                              }
+  658   3                                              else
+  659   3                  return col - 2;
+  660   3              }
+  661   2      
+  662   2              // 优先级3：中间灰度，计算差比和（需要亮→暗）
+  663   2              if (cur > left2)
+  664   2              {
+  665   3                  uint16 sum = (uint16)cur + left2;
+  666   3                  uint16 diff = cur - left2;
+  667   3      
+  668   3                  if (sum > 0)
+  669   3                  {
+  670   4                      int16 ratio = (int16)(diff * 200 / sum);
+  671   4                      if (ratio > DIFF_RATIO_THRESHOLD)
+  672   4                      {
+  673   5                          return col - 2;
+  674   5                      }
+  675   4                  }
+  676   3              }
+  677   2          }
+  678   1          return 1;
+  679   1      }
+  680          
+  681          uint8 search_right_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start)
+  682          {
+  683   1          uint8 col;
+  684   1          uint8 *p_row = &index[row][0];
+  685   1          uint8 cur, right2;
+  686   1      
+  687   1          for (col = start; col < MT9V03X_W - 4; col++)
+  688   1          {
+  689   2              cur    = p_row[col];
+  690   2              right2 = p_row[col + 2];
+  691   2      
+  692   2              // 优先级1：参考点（右边点）是绝对白 → 还在赛道内，跳过
+  693   2              if (right2 > white_max_point)
+  694   2              {
+  695   3                  continue;
+  696   3              }
+  697   2      
+  698   2              // 优先级2：参考点是绝对黑 → 这就是边界，返回参考点位置
+  699   2              if (right2 < white_min_point)
+  700   2              {
+  701   3                                              if(cur<white_min_point)
+  702   3                                              {
+  703   4                                                      return MT9V03X_W-1;
+  704   4                                              }
+  705   3                                              else
+  706   3                  return col + 2;
+  707   3              }
+  708   2      
+  709   2              // 优先级3：中间灰度，计算差比和（需要亮→暗）
+  710   2              if (cur > right2)
+  711   2              {
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 12  
+
+  712   3                  uint16 sum = (uint16)cur + right2;
+  713   3                  uint16 diff = cur - right2;
+  714   3      
+  715   3                  if (sum > 0)
+  716   3                  {
+  717   4                      int16 ratio = (int16)(diff * 200 / sum);
+  718   4                      if (ratio > DIFF_RATIO_THRESHOLD)
+  719   4                      {
+  720   5                          return col + 2;
+  721   5                      }
+  722   4                  }
+  723   3              }
+  724   2          }
+  725   1          return MT9V03X_W - 1;
+  726   1      }
+  727          
+  728          void Search_edge(void)
+  729          {
+  730   1          uint8 row;
+  731   1          uint8 start_l, start_r;
+  732   1          uint8 left_edge, right_edge;
+  733   1          
+  734   1          /* 每帧重置 */
+  735   1          search_line_end = 10;
+  736   1          
+  737   1          /* 第0步：获取参考点 */
+  738   1          get_reference_point((const uint8 *)mt9v03x_image);
+  739   1          
+  740   1          /* 初始化丢线计数 */
+  741   1          l_lose_value = 0;
+  742   1          r_lose_value = 0;
+  743   1          
+  744   1          /* ----- 调用 Mid_Col 计算最长白列，更新 search_line_end 和 start_col_for_search ----- */
+  745   1          Mid_Col(mt9v03x_image);
+  746   1          
+  747   1          /* ----- 正式逐行搜索 ----- */
+  748   1          for (row = MT9V03X_H - 1; row > search_line_end; row--)
+  749   1          {
+  750   2              /* 确定搜索起点 */
+  751   2              if (row == MT9V03X_H - 1)
+  752   2              {
+  753   3                  start_l = start_col_for_search;
+  754   3                  start_r = start_col_for_search;
+  755   3              }
+  756   2              else
+  757   2              {
+  758   3                  /* 左起点 */
+  759   3                  if (l_search_flag[row + 1])
+  760   3                  {
+  761   4                      start_l = l_line_x[row + 1] + SEARCH_OFFSET;
+  762   4                      if (start_l > MT9V03X_W - 5) start_l = MT9V03X_W - 5;
+  763   4                  }
+  764   3                  else
+  765   3                  {
+  766   4                      start_l = start_col_for_search;
+  767   4                  }
+  768   3                  
+  769   3                  /* 右起点 */
+  770   3                  if (r_search_flag[row + 1])
+  771   3                  {
+  772   4                      start_r = r_line_x[row + 1] - SEARCH_OFFSET;
+  773   4                      if (start_r < 5) start_r = 5;
+  774   4                  }
+  775   3                  else
+  776   3                  {
+  777   4                      start_r = start_col_for_search;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 13  
+
+  778   4                  }
+  779   3                  
+  780   3                  if (start_l >= start_r)
+  781   3                  {
+  782   4                      start_l = start_col_for_search;
+  783   4                      start_r = start_col_for_search;
+  784   4                  }
+  785   3              }
+  786   2              
+  787   2              /* 搜索左边界 */
+  788   2              left_edge = search_left_edge(mt9v03x_image, row, start_l);
+  789   2              if (left_edge > 1)
+  790   2              {
+  791   3                  l_line_x[row] = left_edge;
+  792   3                  l_search_flag[row] = 1;
+  793   3              }
+  794   2              else
+  795   2              {
+  796   3                  l_line_x[row] = 0;
+  797   3                  l_search_flag[row] = 0;
+  798   3                  l_lose_value++;
+  799   3              }
+  800   2              
+  801   2              /* 搜索右边界 */
+  802   2                                      right_edge = search_right_edge(mt9v03x_image, row, start_r);
+  803   2              if (right_edge < MT9V03X_W - 1)
+  804   2              {
+  805   3                  r_line_x[row] = right_edge;
+  806   3                  r_search_flag[row] = 1;
+  807   3              }
+  808   2              else
+  809   2              {
+  810   3                  r_line_x[row] = MT9V03X_W - 1;
+  811   3                  r_search_flag[row] = 0;
+  812   3                  r_lose_value++;
+  813   3              }
+  814   2          }
+  815   1      }
+  816          
+  817          void Blacking()
+  818          {
+  819   1          for (height = (MT9V03X_H - 1); height > search_line_end; height--)
+  820   1          {
+  821   2              mt9v03x_image[height][(uint8)m_line_x[height]] = 0x00;
+  822   2              mt9v03x_image[height][l_line_x[height]] = 0x00;
+  823   2              mt9v03x_image[height][r_line_x[height]] = 0x00;
+  824   2          }
+  825   1          ips200_show_gray_image(0, 0, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
+  826   1      }
+  827          
+  828          void Calculate_Offset_1(void) 
+  829          { 
+  830   1          uint8 i; 
+  831   1          uint16 weight_midline_sum = 0; 
+  832   1          uint16 weight_sum = 0; 
+  833   1          uint8 mid_line = MID_W;
+  834   1          uint16 temp_mid;
+  835   1      
+  836   1          /* 只算一次 */
+  837   1          for (i = turn_proline; i > turn_proline - 5; i--)  // 注意边界
+  838   1          { 
+  839   2              weight_midline_sum += m_line_x[i];
+  840   2              weight_sum++;
+  841   2          }
+  842   1          if (weight_sum > 0) 
+  843   1          { 
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 14  
+
+  844   2              mid_line = (uint8)(weight_midline_sum / weight_sum); 
+  845   2          } 
+  846   1          
+  847   1          temp_mid = (last_mid_line * 2 + mid_line * 8) / 10;
+  848   1          final_mid_line = (float)temp_mid;
+  849   1          last_mid_line = temp_mid;
+  850   1      }
+  851          
+  852          uint8 My_Sqrt(int16 x)
+  853          {
+  854   1          uint8 ans = 0, p = 0x80;
+  855   1          while (p != 0)
+  856   1          {
+  857   2              ans += p;
+  858   2              if (ans * ans > x)
+  859   2              {
+  860   3                  ans -= p;
+  861   3              }
+  862   2              p = (uint8)(p / 2);
+  863   2          }
+  864   1          return ans;
+  865   1      }
+  866          
+  867          void La_zhixian(uint8 x1, uint8 y1, uint8 x2, uint8 y2, uint8 *array)
+  868          {
+  869   1          int16 i;
+  870   1          uint8 y_start, y_end, x_start, x_end;
+  871   1          int16 diff_y;
+  872   1          
+  873   1          // 确保 y_start 是下方（大行号），y_end 是上方（小行号）
+  874   1          if (y1 > y2)
+  875   1          {
+  876   2              y_start = y1; y_end = y2;
+  877   2              x_start = x1; x_end = x2;
+  878   2          }
+  879   1          else
+  880   1          {
+  881   2              y_start = y2; y_end = y1;
+  882   2              x_start = x2; x_end = x1;
+  883   2          }
+  884   1          
+  885   1          diff_y = y_start - y_end;
+  886   1          if (diff_y == 0) return;  // 防止除零
+  887   1          
+  888   1          for (i = y_start; i >= y_end; i--)
+  889   1          {
+  890   2              array[i] = x_start + (y_start - i) * (x_end - x_start) / diff_y;
+  891   2          }
+  892   1      }
+  893          
+  894          float parameterA = 0, parameterB = 0;
+  895          
+  896          void Regression(uint8 type, uint8 startline, uint8 endline)//最小二乘法拟合
+  897          {
+  898   1          uint8 i = 0;
+  899   1          uint8 sumlines = endline - startline;
+  900   1          int16 sumX = 0;
+  901   1          int16 sumY = 0;
+  902   1          float averageX = 0;
+  903   1          float averageY = 0;
+  904   1          float sumUp = 0;
+  905   1          float sumDown = 0;
+  906   1      
+  907   1          if (type == 0)
+  908   1          {
+  909   2              for (i = startline; i < endline; i++)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 15  
+
+  910   2              {
+  911   3                  sumX += i;
+  912   3                  sumY += m_line_x[i];
+  913   3              }
+  914   2              if (sumlines != 0)
+  915   2              {
+  916   3                  averageX = sumX * 1.0 / sumlines;
+  917   3                  averageY = sumY * 1.0 / sumlines;
+  918   3              }
+  919   2              for (i = startline; i < endline; i++)
+  920   2              {
+  921   3                  sumUp += (m_line_x[i] - averageY) * (i - averageX);
+  922   3                  sumDown += (i - averageX) * (i - averageX);
+  923   3              }
+  924   2              parameterB = sumUp / sumDown;
+  925   2              parameterA = averageY - parameterB * averageX;
+  926   2          }
+  927   1          else if (type == 1)
+  928   1          {
+  929   2              for (i = startline; i < endline; i++)
+  930   2              {
+  931   3                  sumX += i;
+  932   3                  sumY += l_line_x[i];
+  933   3              }
+  934   2              averageX = sumX * 1.0 / sumlines;
+  935   2              averageY = sumY * 1.0 / sumlines;
+  936   2              for (i = startline; i < endline; i++)
+  937   2              {
+  938   3                  sumUp += (l_line_x[i] - averageY) * (i - averageX);
+  939   3                  sumDown += (i - averageX) * (i - averageX);
+  940   3              }
+  941   2              parameterB = sumUp / sumDown;
+  942   2              parameterA = averageY - parameterB * averageX;
+  943   2          }
+  944   1          else if (type == 2)
+  945   1          {
+  946   2              for (i = startline; i < endline; i++)
+  947   2              {
+  948   3                  sumX += i;
+  949   3                  sumY += r_line_x[i];
+  950   3              }
+  951   2              averageX = sumX * 1.0 / sumlines;
+  952   2              averageY = sumY * 1.0 / sumlines;
+  953   2              for (i = startline; i < endline; i++)
+  954   2              {
+  955   3                  sumUp += (r_line_x[i] - averageY) * (i - averageX);
+  956   3                  sumDown += (i - averageX) * (i - averageX);
+  957   3              }
+  958   2              parameterB = sumUp / sumDown;
+  959   2              parameterA = averageY - parameterB * averageX;
+  960   2          }
+  961   1      }
+  962          
+  963          void Hua_Xian(uint8 type, uint8 startline, uint8 endline, float parameterB, float parameterA)
+  964          {
+  965   1          uint8 i;
+  966   1          int i_int;
+  967   1      
+  968   1          if (type == 1)
+  969   1          {
+  970   2              for (i = startline; i < endline; i++)
+  971   2              {
+  972   3                  l_line_x[i] = (uint8)(parameterB * i + parameterA);
+  973   3                  if (l_line_x[i] < 0)
+  974   3                  {
+  975   4                      l_line_x[i] = 0;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 16  
+
+  976   4                  }
+  977   3              }
+  978   2          }
+  979   1          else if (type == 2)
+  980   1          {
+  981   2              for (i_int = startline; i_int < endline; i_int++)
+  982   2              {
+  983   3                  r_line_x[i_int] = (uint8)(parameterB * i_int + parameterA);
+  984   3                  if (r_line_x[i_int] > 187)
+  985   3                  {
+  986   4                      r_line_x[i_int] = 187;
+  987   4                  }
+  988   3              }
+  989   2          }
+  990   1          else if (type == 0)
+  991   1          {
+  992   2              for (i_int = startline; i_int < endline; i_int++)
+  993   2              {
+  994   3                  m_line_x[i_int] = (uint8)((l_line_x[i_int] / 2 + r_line_x[i_int] / 2));
+  995   3                  if (m_line_x[i_int] < 0)
+  996   3                  {
+  997   4                      m_line_x[i_int] = 0;
+  998   4                  }
+  999   3                  if (m_line_x[i_int] > 185)
+ 1000   3                  {
+ 1001   4                      m_line_x[i_int] = 185;
+ 1002   4                  }
+ 1003   3              }
+ 1004   2          }
+ 1005   1      }
+ 1006          
+ 1007          uint8 line_valid_start = 0;
+ 1008          
+ 1009          
+ 1010          //测试丢线位置的函数1左，2右
+ 1011          void Diuxian_weizhi_test(uint8 type, uint8 startline, uint8 endline)
+ 1012          {
+ 1013   1          uint8 y;
+ 1014   1          line_valid_start = 0;
+ 1015   1          diuxian_sum = 0;
+ 1016   1      
+ 1017   1          if (type == 1)
+ 1018   1          {
+ 1019   2              for (y = startline; y >= endline; y--)
+ 1020   2              {
+ 1021   3                  if (l_search_flag[y] == 1 && l_search_flag[y - 5] == 1 && line_valid_start == 0)
+ 1022   3                  {
+ 1023   4                      line_valid_start = y;
+ 1024   4                  }
+ 1025   3                  else if (l_search_flag[y] == 0 && l_search_flag[y - 5] == 0)
+ 1026   3                  {
+ 1027   4                      diuxian_sum++;
+ 1028   4                  }
+ 1029   3              }
+ 1030   2          }
+ 1031   1          else if (type == 2)
+ 1032   1          {
+ 1033   2              for (y = startline; y >= endline; y--)
+ 1034   2              {
+ 1035   3                  if (r_search_flag[y] == 1 && r_search_flag[y - 5] == 1 && line_valid_start == 0)
+ 1036   3                  {
+ 1037   4                      line_valid_start = y;
+ 1038   4                  }
+ 1039   3                  else if (r_search_flag[y] == 0 && r_search_flag[y - 5] == 0)
+ 1040   3                  {
+ 1041   4                      diuxian_sum++;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 17  
+
+ 1042   4                  }
+ 1043   3              }
+ 1044   2          }
+ 1045   1      }
+ 1046          
+ 1047          uint8 l_guaidain_x1 = 0, l_guaidain_y1 = 0;
+ 1048          uint8 r_guaidain_x1 = 0, r_guaidain_y1 = 0;
+ 1049          uint8 l_guaidain_x2 = 0, l_guaidain_y2 = 0;
+ 1050          uint8 r_guaidain_x2 = 0, r_guaidain_y2 = 0;
+ 1051          
+ 1052          uint8 Bianxian_guaidian_num(uint8 type, uint8 startline, uint8 endline)
+ 1053          {
+ 1054   1          uint8 bianxian_guaidian_num = 0;
+ 1055   1          uint8 y;
+ 1056   1      
+ 1057   1          l_guaidain_x1 = 0;
+ 1058   1          l_guaidain_y1 = 0;
+ 1059   1          r_guaidain_x1 = 0;
+ 1060   1          r_guaidain_y1 = 0;
+ 1061   1          l_guaidain_x2 = 0;
+ 1062   1          l_guaidain_y2 = 0;
+ 1063   1          r_guaidain_x2 = 0;
+ 1064   1          r_guaidain_y2 = 0;
+ 1065   1      
+ 1066   1          if (type == 1)
+ 1067   1          {
+ 1068   2              if (l_line_x[MT9V03X_H - 1] != 0)
+ 1069   2              {
+ 1070   3                  for (y = startline; y > endline; y--)
+ 1071   3                  {
+ 1072   4                      if (fabs(l_line_x[y] - l_line_x[y + 1]) < 4 && (l_line_x[y] - l_line_x[y - 3] > 8))
+ 1073   4                      {
+ 1074   5                          l_guaidain_x1 = l_line_x[y];
+ 1075   5                          l_guaidain_y1 = y;
+ 1076   5                          bianxian_guaidian_num++;
+ 1077   5                          break;
+ 1078   5                      }
+ 1079   4                  }
+ 1080   3                  if (bianxian_guaidian_num == 1)
+ 1081   3                  {
+ 1082   4                      for (y = l_guaidain_y1 - 20; y > endline; y--)
+ 1083   4                      {
+ 1084   5                          if (fabs(l_line_x[y] - l_line_x[y - 1]) < 4 && (l_line_x[y] - l_line_x[y + 3] > 8))
+ 1085   5                          {
+ 1086   6                              l_guaidain_x2 = l_line_x[y];
+ 1087   6                              l_guaidain_y2 = y;
+ 1088   6                              bianxian_guaidian_num++;
+ 1089   6                              break;
+ 1090   6                          }
+ 1091   5                      }
+ 1092   4                  }
+ 1093   3              }
+ 1094   2          }
+ 1095   1          if (type == 2)
+ 1096   1          {
+ 1097   2              if (r_line_x[MT9V03X_H - 1] != MT9V03X_W - 1)
+ 1098   2              {
+ 1099   3                  for (y = startline; y > endline; y--)
+ 1100   3                  {
+ 1101   4                      if (fabs(r_line_x[y] - r_line_x[y + 1]) < 4 && (r_line_x[y] - r_line_x[y - 3] < -8))
+ 1102   4                      {
+ 1103   5                          r_guaidain_x1 = r_line_x[y];
+ 1104   5                          r_guaidain_y1 = y;
+ 1105   5                          bianxian_guaidian_num++;
+ 1106   5                          break;
+ 1107   5                      }
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 18  
+
+ 1108   4                  }
+ 1109   3                  if (bianxian_guaidian_num == 1)
+ 1110   3                  {
+ 1111   4                      for (y = endline; y > r_guaidain_y1 - 20; y++)
+ 1112   4                      {
+ 1113   5                          if (fabs(r_line_x[y] - r_line_x[y - 1]) < 4 && (r_line_x[y] - r_line_x[y + 3] < -8))
+ 1114   5                          {
+ 1115   6                              r_guaidain_x2 = r_line_x[y];
+ 1116   6                              r_guaidain_y2 = y;
+ 1117   6                              bianxian_guaidian_num++;
+ 1118   6                              break;
+ 1119   6                          }
+ 1120   5                      }
+ 1121   4                  }
+ 1122   3              }
+ 1123   2          }
+ 1124   1          return bianxian_guaidian_num;
+ 1125   1      }
+ 1126          
+ 1127          uint8 l_guaidain_x = 0, l_guaidain_y = 0;
+ 1128          uint8 r_guaidain_x = 0, r_guaidain_y = 0;
+ 1129          
+ 1130          void Bianxian_guaidian(uint8 type, uint8 startline, uint8 endline)
+ 1131          {
+ 1132   1          uint8 y;
+ 1133   1      
+ 1134   1          l_guaidain_x = 0;
+ 1135   1          l_guaidain_y = 0;
+ 1136   1          r_guaidain_x = 0;
+ 1137   1          r_guaidain_y = 0;
+ 1138   1      
+ 1139   1          if (type == 1)
+ 1140   1          {
+ 1141   2              if (l_line_x[MT9V03X_H - 1] != 0)
+ 1142   2              {
+ 1143   3                  for (y = startline; y > endline; y--)
+ 1144   3                  {
+ 1145   4                      if (fabs(l_line_x[y] - l_line_x[y + 1]) < 4 && (l_line_x[y] - l_line_x[y - 3] > 8))
+ 1146   4                      {
+ 1147   5                          l_guaidain_y = y;
+ 1148   5                          l_guaidain_x = l_line_x[y];
+ 1149   5                          break;
+ 1150   5                      }
+ 1151   4                  }
+ 1152   3              }
+ 1153   2          }
+ 1154   1          if (type == 2)
+ 1155   1          {
+ 1156   2              if (r_line_x[MT9V03X_H - 1] != MT9V03X_W - 1)
+ 1157   2              {
+ 1158   3                  for (y = startline; y > endline; y--)
+ 1159   3                  {
+ 1160   4                      if (fabs(r_line_x[y] - r_line_x[y + 1]) < 4 && (r_line_x[y] - r_line_x[y - 3] < -8))
+ 1161   4                      {
+ 1162   5                          r_guaidain_y = y;
+ 1163   5                          r_guaidain_x = r_line_x[y];
+ 1164   5                          break;
+ 1165   5                      }
+ 1166   4                  }
+ 1167   3              }
+ 1168   2          }
+ 1169   1      }
+ 1170          
+ 1171          
+ 1172          
+ 1173          uint8 Num = 0;
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 19  
+
+ 1174          float l_jifen=65;
+ 1175          //*****************************************环岛**************************************************//
+ 1176          uint8 huandao_stage = 1;
+ 1177          
+ 1178          //*************************************************************************
+ 1179          void Handle_Left_Cirque()
+ 1180          {
+ 1181   1          uint8 y;
+ 1182   1          switch (huandao_stage)
+ 1183   1          {
+ 1184   2              case 1:
+ 1185   2                  /*if(!subed)
+ 1186   2                  {
+ 1187   2                      g_base_speed -=25;
+ 1188   2                      subed = 1;
+ 1189   2                  }*/
+ 1190   2                  Diuxian_weizhi_test(1, MT9V03X_H - 5, MT9V03X_H - 35);
+ 1191   2                  if (diuxian_sum >= 28)
+ 1192   2                      huandao_stage = 2;
+ 1193   2                  break;
+ 1194   2      
+ 1195   2              case 2:
+ 1196   2                  Diuxian_weizhi_test(1, MT9V03X_H - 5, MT9V03X_H - 36);
+ 1197   2                  if (line_valid_start >= 100 && diuxian_sum < 5)
+ 1198   2                  {
+ 1199   3                      huandao_stage = 3;
+ 1200   3                  }
+ 1201   2                  break;
+ 1202   2      
+ 1203   2              case 3:
+ 1204   2                  find_circle_point(1, 30, 85);
+ 1205   2                                                      get_distance=1;
+ 1206   2                                      
+ 1207   2                  if (annulus_s1 > 340)
+ 1208   2                  {
+ 1209   3                      Diuxian_weizhi_test(1, MT9V03X_H - 1, MT9V03X_H - 30);
+ 1210   3                      if (diuxian_sum >= 28&&!circle_point_flag)
+ 1211   3                      {
+ 1212   4                          huandao_stage = 4;
+ 1213   4                          get_distance = 0;
+ 1214   4                      }
+ 1215   3                  }
+ 1216   2                  break;
+ 1217   2      
+ 1218   2              case 4:
+ 1219   2                  get_distance = 1;//启动距离积分
+ 1220   2                  find_circle_point2(2, 65, 20);
+ 1221   2                  if (circle_point_flag2 == 1 && annulus_s1 > 60)
+ 1222   2                  {
+ 1223   3                      huandao_stage = 5;
+ 1224   3                      get_distance = 0;
+ 1225   3                  }
+ 1226   2                  break;
+ 1227   2      
+ 1228   2              case 5:
+ 1229   2                  find_circle_point2(2, 105, 30);
+ 1230   2                  Diuxian_weizhi_test(2, MT9V03X_H - 15, MT9V03X_H - 40);
+ 1231   2                  if (diuxian_sum >= 23)
+ 1232   2                      huandao_stage = 6;
+ 1233   2                  break;
+ 1234   2      
+ 1235   2              case 6:
+ 1236   2                  get_distance = 1;
+ 1237   2                  Diuxian_weizhi_test(1, MT9V03X_H - 65, MT9V03X_H - 85);
+ 1238   2                  if (diuxian_sum < 5 || annulus_s1 > l_jifen)
+ 1239   2                  {
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 20  
+
+ 1240   3                      huandao_stage = 7;
+ 1241   3                      get_distance = 0;
+ 1242   3                  }
+ 1243   2                  break;
+ 1244   2              case 7:
+ 1245   2                  get_distance = 1;
+ 1246   2                  if (annulus_s1 > 300)
+ 1247   2                  {
+ 1248   3                                                                      type2=0;//避免越界的操作
+ 1249   3                      road_type.LeftCirque = 0;
+ 1250   3                      huandao_stage = 1;
+ 1251   3                      get_distance = 0;
+ 1252   3                  }
+ 1253   2                  break;
+ 1254   2          }
+ 1255   1      
+ 1256   1          // 补线操作
+ 1257   1          if (huandao_stage == 1)
+ 1258   1          {
+ 1259   2              for (y = MT9V03X_H - 10; y >= search_line_end; y--)
+ 1260   2              {
+ 1261   3                  l_line_x[y] = r_line_x[y] - kuandu_saidao[MT9V03X_H - 1 - y];
+ 1262   3              }
+ 1263   2          }
+ 1264   1          else if (huandao_stage == 2)
+ 1265   1          {
+ 1266   2              for (y = MT9V03X_H - 10; y >= search_line_end; y--)
+ 1267   2              {
+ 1268   3                  l_line_x[y] = r_line_x[y] - kuandu_saidao[MT9V03X_H - 1 - y];
+ 1269   3              }
+ 1270   2          }
+ 1271   1          else if (huandao_stage == 3)
+ 1272   1          {
+ 1273   2              if (circle_point_flag)
+ 1274   2              {
+ 1275   3                  La_zhixian(MT9V03X_W - 3, 118, circle_x, circle_y, r_line_x);
+ 1276   3              }
+ 1277   2          }
+ 1278   1          else if (huandao_stage == 4)
+ 1279   1          {
+ 1280   2              // 等待，不补线
+ 1281   2          }
+ 1282   1          else if (huandao_stage == 5)
+ 1283   1          {
+ 1284   2              if (circle_point_flag2 == 1)
+ 1285   2              {
+ 1286   3                  La_zhixian(circle_x2, circle_y2, 7, 50, r_line_x);
+ 1287   3              }
+ 1288   2          }
+ 1289   1          else if (huandao_stage == 6)
+ 1290   1          {
+ 1291   2              uint8 start_row = search_line_end - 10;
+ 1292   2              uint8 start_col = l_line_x[search_line_end - 10];
+ 1293   2              La_zhixian(start_col, start_row, MT9V03X_W - 3, 118, r_line_x);
+ 1294   2          }
+ 1295   1          else if (huandao_stage == 7)
+ 1296   1          {
+ 1297   2                                      type2=1;
+ 1298   2          }
+ 1299   1      }
+ 1300          float r_jifen=60;
+ 1301          //*************************************************************************
+ 1302          void Handle_Right_Cirque()
+ 1303          {
+ 1304   1          uint8 y;
+ 1305   1          switch (huandao_stage)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 21  
+
+ 1306   1          {
+ 1307   2              case 1:
+ 1308   2                                              /*if(!subed)
+ 1309   2                                              {
+ 1310   2                                                      g_base_speed-=15;
+ 1311   2                                                      subed=1;
+ 1312   2                                              }*/
+ 1313   2                  Diuxian_weizhi_test(2, MT9V03X_H - 5, MT9V03X_H - 35);
+ 1314   2                  if (diuxian_sum >= 28)
+ 1315   2                      huandao_stage = 2;
+ 1316   2                  break;
+ 1317   2              case 2:
+ 1318   2                                              /*
+ 1319   2                                                      if(     you_pian(2,MT9V03X_H-5,MT9V03X_H-21)    )//右偏,范围为偶数
+ 1320   2                                                      {
+ 1321   2                                                              huandao_stage = 3;
+ 1322   2                                                      }
+ 1323   2                                                      break;
+ 1324   2                                      */
+ 1325   2                                              
+ 1326   2                  Diuxian_weizhi_test(2, MT9V03X_H - 5, MT9V03X_H - 36);
+ 1327   2                  if (line_valid_start >= 100 && diuxian_sum < 5)
+ 1328   2                  {
+ 1329   3                      huandao_stage = 3;
+ 1330   3                                                              
+ 1331   3                  }
+ 1332   2                  break;
+ 1333   2                                      
+ 1334   2                  case 3:
+ 1335   2                          find_circle_point(2, 30, 80);
+ 1336   2              get_distance = 1;
+ 1337   2                          if(annulus_s1>340)//积分距离如何把握
+ 1338   2                          {
+ 1339   3                                          Diuxian_weizhi_test(2, MT9V03X_H - 1, MT9V03X_H - 30);//右下完全丢线
+ 1340   3                                          {
+ 1341   4                                                  if (diuxian_sum>= 28)
+ 1342   4                                                  {
+ 1343   5                                                          huandao_stage = 4;
+ 1344   5                      get_distance = 0;
+ 1345   5                                                  }
+ 1346   4                                          }
+ 1347   3                          }
+ 1348   2                          break;
+ 1349   2              case 4:
+ 1350   2                  get_distance = 1;
+ 1351   2                  find_circle_point2(1, 65, 20);//想先积分再找，避免提前找
+ 1352   2                  if (circle_point_flag2 == 1&&annulus_s1>60)
+ 1353   2                  {
+ 1354   3                      huandao_stage = 5;
+ 1355   3                      get_distance = 0;
+ 1356   3                  }
+ 1357   2                  break;
+ 1358   2              case 5:
+ 1359   2                              find_circle_point2(1, 105, 30);//find_circle_point2(1, 70, 2);
+ 1360   2                  Diuxian_weizhi_test(1, MT9V03X_H - 15, MT9V03X_H - 40);
+ 1361   2                  if (diuxian_sum >= 23)
+ 1362   2                      huandao_stage = 6;
+ 1363   2                  break;
+ 1364   2              case 6:
+ 1365   2              get_distance = 1;
+ 1366   2                          Diuxian_weizhi_test(2, MT9V03X_H - 65, MT9V03X_H - 85);
+ 1367   2                              if(diuxian_sum<5||annulus_s1>r_jifen)
+ 1368   2                              {
+ 1369   3                                      huandao_stage=7;
+ 1370   3              get_distance = 0;
+ 1371   3                              }
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 22  
+
+ 1372   2                  break;
+ 1373   2              case 7:
+ 1374   2                  get_distance = 1;
+ 1375   2                  if (annulus_s1 > 300)
+ 1376   2                  {
+ 1377   3                      road_type.RightCirque = 0;
+ 1378   3                      huandao_stage = 1;
+ 1379   3                      get_distance = 0;
+ 1380   3                  }
+ 1381   2                  break;
+ 1382   2          }
+ 1383   1      
+ 1384   1          if (huandao_stage == 1)
+ 1385   1          {
+ 1386   2              for (y = MT9V03X_H - 10; y >= search_line_end; y--)
+ 1387   2              {
+ 1388   3                  r_line_x[y] = l_line_x[y] + kuandu_saidao[MT9V03X_H - 1 - y];
+ 1389   3              }
+ 1390   2          }
+ 1391   1          else if (huandao_stage == 2)
+ 1392   1          {
+ 1393   2              for (y = MT9V03X_H - 10; y >= search_line_end; y--)
+ 1394   2              {
+ 1395   3                  r_line_x[y] = l_line_x[y] + kuandu_saidao[MT9V03X_H - 1 - y];
+ 1396   3              }
+ 1397   2          }
+ 1398   1          else if (huandao_stage == 3)
+ 1399   1          {
+ 1400   2              if (circle_point_flag)
+ 1401   2              {
+ 1402   3                  La_zhixian(2, 118, circle_x, circle_y, l_line_x);
+ 1403   3              }
+ 1404   2          }   
+ 1405   1          else if (huandao_stage == 4)
+ 1406   1          {
+ 1407   2                              
+ 1408   2          }
+ 1409   1          else if (huandao_stage == 5)
+ 1410   1          {
+ 1411   2              if (circle_point_flag2 == 1)
+ 1412   2              {
+ 1413   3                  La_zhixian(circle_x2, circle_y2, 180, 50, l_line_x);
+ 1414   3              }
+ 1415   2          }
+ 1416   1                      else if (huandao_stage == 6)
+ 1417   1                      {
+ 1418   2                                      uint8 start_row = search_line_end-10;
+ 1419   2                                      uint8 start_col = r_line_x[search_line_end-10];
+ 1420   2                                      /* 拉线补左边界：从右上角点拉到左下(2, 118) */
+ 1421   2                                      La_zhixian(start_col, start_row, 2, 118, l_line_x);
+ 1422   2                      }
+ 1423   1          else if (huandao_stage == 7)
+ 1424   1          {
+ 1425   2              for (y = MT9V03X_H - 10; y >= search_line_end; y--)
+ 1426   2              {
+ 1427   3                  r_line_x[y] = l_line_x[y] + kuandu_saidao[MT9V03X_H - 1 - y]+11;
+ 1428   3              }
+ 1429   2          }
+ 1430   1      
+ 1431   1      }
+ 1432          //************************************************end*************************************//
+ 1433          
+ 1434          
+ 1435          //**********************************************十字***************************************//
+ 1436          uint16 cross_s = 0;
+ 1437          
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 23  
+
+ 1438          void Handle_Cross(void)
+ 1439          {
+ 1440   1          get_distance = 1;
+ 1441   1          if (annulus_s1 > 180)
+ 1442   1          {
+ 1443   2              get_distance = 0;
+ 1444   2              cross_s = 0;
+ 1445   2              road_type.Cross = 0;
+ 1446   2          }
+ 1447   1                      
+ 1448   1          Check_Cross_Guaidian(1);//检测左边
+ 1449   1          if (found_left_corner[0] && found_left_corner[1])
+ 1450   1          {
+ 1451   2              La_zhixian(l_line_x[cross_left[0]], cross_left[0], l_line_x[cross_left[1]], cross_left[1], l_line
+             -_x);
+ 1452   2          }
+ 1453   1          else if (!found_left_corner[0] && found_left_corner[1])
+ 1454   1          {
+ 1455   2              Regression(1, cross_left[1] - 10, cross_left[1]);
+ 1456   2              Hua_Xian(1, cross_left[1], MT9V03X_H - 3, parameterB, parameterA);
+ 1457   2          }
+ 1458   1          Check_Cross_Guaidian(2);//检测右边
+ 1459   1          if (found_right_corner[0] && found_right_corner[1])
+ 1460   1          {
+ 1461   2              La_zhixian(r_line_x[cross_right[0]], cross_right[0], r_line_x[cross_right[1]], cross_right[1], r_
+             -line_x);
+ 1462   2          }
+ 1463   1          else if (!found_right_corner[0] && found_right_corner[1])
+ 1464   1          {
+ 1465   2              Regression(2, cross_right[1] - 10, cross_right[1]);
+ 1466   2              Hua_Xian(2, cross_right[1], MT9V03X_H - 3, parameterB, parameterA);
+ 1467   2          }
+ 1468   1      }
+ 1469          
+ 1470          uint8 cross_left[2] = {0, 0};
+ 1471          uint8 cross_right[2] = {0, 0};
+ 1472          uint8 found_left_corner[2] = {0, 0};
+ 1473          uint8 found_right_corner[2] = {0, 0};
+ 1474          
+ 1475          void Check_Cross_Guaidian(uint8 type)
+ 1476          {
+ 1477   1          uint8 y1;
+ 1478   1          uint8 y2;
+ 1479   1          uint8 y;
+ 1480   1          uint8 start_s = MT9V03X_H - 10;  // 从底部向上10行开始搜索
+ 1481   1              
+ 1482   1          cross_left[0] = cross_left[1] = cross_right[0] = cross_right[1] = 0;
+ 1483   1          found_left_corner[0] = found_left_corner[1] = found_right_corner[0] = found_right_corner[1] = 0;
+ 1484   1      
+ 1485   1          if (type == 1)
+ 1486   1          {
+ 1487   2              for (y1 = start_s; y1 >= MT9V03X_H / 4 * 3; y1--)
+ 1488   2              {
+ 1489   3                  if (fabs(l_line_x[y1] - l_line_x[y1 - 1]) < 4 && (l_line_x[y1] - l_line_x[y1 - 10]) > 16 )//&
+             -& l_line_x[y1 - 10] == 0
+ 1490   3                  {
+ 1491   4                      cross_left[0] = y1;
+ 1492   4                      found_left_corner[0] = 1;
+ 1493   4                      break;
+ 1494   4                  }
+ 1495   3              }
+ 1496   2              if (found_left_corner[0])
+ 1497   2              {
+ 1498   3                  for (y2 = cross_left[0] - 1; y2 >= 25; y2--)
+ 1499   3                  {
+ 1500   4                      if (fabs(l_line_x[y2] - l_line_x[y2 - 1]) < 4 && l_line_x[y2] - l_line_x[y2 - 5] < -16 )/
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 24  
+
+             -/&& l_line_x[y2] == 0
+ 1501   4                      {
+ 1502   5                          cross_left[1] = y2 - 5 - 5;
+ 1503   5                          found_left_corner[1] = 1;
+ 1504   5                          break;
+ 1505   5                      }
+ 1506   4                  }
+ 1507   3              }
+ 1508   2              else
+ 1509   2              {
+ 1510   3                  for (y2 = MT9V03X_H / 4 * 3; y2 < start_s; y2++)
+ 1511   3                  {
+ 1512   4                      if (fabs(l_line_x[y2] - l_line_x[y2 - 1]) < 4 && l_line_x[y2] - l_line_x[y2 - 5] < -16 )/
+             -/&& l_line_x[y2] == 0
+ 1513   4                      {
+ 1514   5                          cross_left[1] = y2 - 5 - 5;
+ 1515   5                          found_left_corner[1] = 1;
+ 1516   5                          break;
+ 1517   5                      }
+ 1518   4                  }
+ 1519   3              }
+ 1520   2          }
+ 1521   1          else if (type == 2)
+ 1522   1          {
+ 1523   2              for (y1 = start_s; y1 >= MT9V03X_H / 4 * 3; y1--)
+ 1524   2              {
+ 1525   3                  if (fabs(r_line_x[y1] - r_line_x[y1 - 1]) < 4 && (r_line_x[y1] - r_line_x[y1 - 10]) < -16 && 
+             -r_line_x[y1 - 10] == MT9V03X_W - 1)
+ 1526   3                  {
+ 1527   4                      cross_right[0] = y1;
+ 1528   4                      found_right_corner[0] = 1;
+ 1529   4                      break;
+ 1530   4                  }
+ 1531   3              }
+ 1532   2              if (found_right_corner[0])
+ 1533   2              {
+ 1534   3                  for (y2 = cross_right[0] - 1; y2 >= 25; y2--)
+ 1535   3                  {
+ 1536   4                      if (fabs(r_line_x[y2] - r_line_x[y2 - 1]) < 4 && (r_line_x[y2] - r_line_x[y2 - 5]) > 16 &
+             -& r_line_x[y2] == MT9V03X_W - 1)
+ 1537   4                      {
+ 1538   5                          cross_right[1] = y2 - 5 - 5;
+ 1539   5                          found_right_corner[1] = 1;
+ 1540   5                          break;
+ 1541   5                      }
+ 1542   4                  }
+ 1543   3              }
+ 1544   2              else
+ 1545   2              {
+ 1546   3                  for (y = MT9V03X_H / 4 * 3; y < start_s; y++)
+ 1547   3                  {
+ 1548   4                      if (fabs(r_line_x[y] - r_line_x[y - 1]) < 4 && r_line_x[y] - r_line_x[y - 10] > 16 && r_l
+             -ine_x[y] == MT9V03X_W - 1)
+ 1549   4                      {
+ 1550   5                          cross_right[1] = y - 5 - 5;
+ 1551   5                          found_right_corner[1] = 1;
+ 1552   5                          break;
+ 1553   5                      }
+ 1554   4                  }
+ 1555   3              }
+ 1556   2          }
+ 1557   1      }
+ 1558          //*********************************************end*******************************************************
+             -***//
+ 1559          uint8 check_zhibian(uint8 type)//距离下方50到90行
+ 1560          {
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 25  
+
+ 1561   1          int straight_count = 0;
+ 1562   1          uint8 h;
+ 1563   1      
+ 1564   1          if (type == 1)
+ 1565   1          {
+ 1566   2              for (h = MT9V03X_H - 50; h > MT9V03X_H  - 90; h -= 4)
+ 1567   2              {
+ 1568   3                  if (l_line_x[h] - l_line_x[h - 4] > -6 && l_line_x[h] - l_line_x[h - 4] <= -2)
+ 1569   3                  {
+ 1570   4                      straight_count++;
+ 1571   4                  }
+ 1572   3              }
+ 1573   2              if (straight_count >= 7)
+ 1574   2                  return 1;
+ 1575   2              return 0;
+ 1576   2          }
+ 1577   1          if (type == 2)
+ 1578   1          {
+ 1579   2              straight_count = 0;
+ 1580   2              for (h = MT9V03X_H - 50; h > MT9V03X_H  - 90; h -= 4)//50~90
+ 1581   2              {
+ 1582   3                  if (r_line_x[h] - r_line_x[h - 4] < 6 && r_line_x[h] - r_line_x[h - 4] >= 2)
+ 1583   3                  {
+ 1584   4                      straight_count++;
+ 1585   4                  }
+ 1586   3              }
+ 1587   2              if (straight_count >= 7)
+ 1588   2                  return 1;
+ 1589   2              return 0;
+ 1590   2          }
+ 1591   1          return 0;
+ 1592   1      }
+ 1593          
+ 1594          uint8 check_circle_jump_point(uint8 type)//从距离底部10行到一半（60行）
+ 1595          {
+ 1596   1          uint8 h;
+ 1597   1          if(type==1)
+ 1598   1          {
+ 1599   2              for(h=MT9V03X_H-10;h>MT9V03X_H/2;h--)
+ 1600   2              {
+ 1601   3                  if(l_line_x[h]-l_line_x[h-4]>10 && l_line_x[h-4]<5)
+ 1602   3                  {
+ 1603   4                      return 1;
+ 1604   4                  }
+ 1605   3              }
+ 1606   2              return 0;
+ 1607   2          }
+ 1608   1          if(type==2)
+ 1609   1          {
+ 1610   2              for(h=MT9V03X_H-10;h>MT9V03X_H/2;h--)
+ 1611   2              {
+ 1612   3                  if(r_line_x[h]-r_line_x[h-4]<-10 && r_line_x[h-4]>188-5)
+ 1613   3                  {
+ 1614   4                      return 1;
+ 1615   4                  }
+ 1616   3              }
+ 1617   2              return 0;
+ 1618   2          }
+ 1619   1          return 0;
+ 1620   1      }
+ 1621          
+ 1622          uint8 circle_x=0;
+ 1623          uint8 circle_y=0;
+ 1624          uint8 circle_point_flag=0;
+ 1625          
+ 1626          void find_circle_point(uint8 type, uint8 kaishi_y, uint8 jiesu_y)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 26  
+
+ 1627          {
+ 1628   1          uint8 h;
+ 1629   1          circle_x = 0;
+ 1630   1          circle_y = 0;
+ 1631   1          circle_point_flag = 0;
+ 1632   1          
+ 1633   1          if (type == 1)  // 检测左边界
+ 1634   1          {
+ 1635   2              for (h = kaishi_y; h < jiesu_y; h++)
+ 1636   2              {
+ 1637   3                  // 左边界角点特征：局部向左凸出（列坐标突然变小，然后恢复）
+ 1638   3                  if (l_line_x[h] - l_line_x[h+2] > 20 && 
+ 1639   3                      l_line_x[h] - l_line_x[h-2] > -4 
+ 1640   3                      )
+ 1641   3                  {
+ 1642   4                      circle_x = l_line_x[h];
+ 1643   4                      circle_y = h;
+ 1644   4                      circle_point_flag = 1;
+ 1645   4                      break;
+ 1646   4                  }
+ 1647   3              }
+ 1648   2          }
+ 1649   1          else if (type == 2)  // 检测右边界
+ 1650   1          {
+ 1651   2              for (h = kaishi_y; h < jiesu_y; h++)
+ 1652   2              {
+ 1653   3                  // 右边界角点特征：局部向右凸出（列坐标突然变大，然后恢复）
+ 1654   3                  if (r_line_x[h] - r_line_x[h+2] < -20 && 
+ 1655   3                      r_line_x[h] - r_line_x[h-2] < 4 
+ 1656   3                      )
+ 1657   3                  {
+ 1658   4                      circle_x = r_line_x[h];
+ 1659   4                      circle_y = h;
+ 1660   4                      circle_point_flag = 1;
+ 1661   4                      break;
+ 1662   4                  }
+ 1663   3              }
+ 1664   2          }
+ 1665   1      }
+ 1666          uint8 circle_x2=0;
+ 1667          uint8 circle_y2=0;
+ 1668          uint8 circle_point_flag2=0;
+ 1669          
+ 1670          void find_circle_point2(uint8 type,uint8 down_y,uint8 up_y)
+ 1671          {
+ 1672   1          uint8 h;
+ 1673   1          circle_x2=0;
+ 1674   1          circle_y2=0;
+ 1675   1          circle_point_flag2=0;
+ 1676   1          if(type==1)
+ 1677   1          {
+ 1678   2              for(h=down_y;h>=up_y;h=h-1)
+ 1679   2              {
+ 1680   3                  if(l_line_x[h]>l_line_x[h-3]&&l_line_x[h]>l_line_x[h+3])
+ 1681   3                  {
+ 1682   4                      circle_x2=l_line_x[h+2];
+ 1683   4                      circle_y2=h+2;
+ 1684   4                      circle_point_flag2=1;
+ 1685   4                      break;
+ 1686   4                  }
+ 1687   3              }
+ 1688   2          }
+ 1689   1          if(type==2)
+ 1690   1          {
+ 1691   2              for(h=down_y;h>=up_y;h=h-1)
+ 1692   2              {
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 27  
+
+ 1693   3                  if(r_line_x[h] < r_line_x[h-3] && r_line_x[h] < r_line_x[h+3] )
+ 1694   3                  {
+ 1695   4                      circle_x2=r_line_x[h+2];
+ 1696   4                      circle_y2=h+2;
+ 1697   4                      circle_point_flag2=1;
+ 1698   4                      break;
+ 1699   4                  }
+ 1700   3              }
+ 1701   2          }
+ 1702   1      }
+ 1703          
+ 1704          /**
+ 1705           * @brief 冲出赛道检测
+ 1706           * 条件1：最长白列长度 < 10
+ 1707           * 条件2：距离底部10行处，中间区域90%以上为黑色
+ 1708           * 同时满足则触发停车
+ 1709           */
+ 1710          void Check_Out(void)
+ 1711          {
+ 1712   1          uint8 col;
+ 1713   1          uint16 black_count = 0;
+ 1714   1          uint16 total_count = 0;
+ 1715   1          uint8 row = MT9V03X_H - 15;  /* 固定距离底部10行的那一行 */
+ 1716   1          
+ 1717   1          /* 条件2：该行中间区域(40~149列)统计黑色比例 */
+ 1718   1          for (col = 10; col < 170; col++)
+ 1719   1          {
+ 1720   2              total_count++;
+ 1721   2              if (mt9v03x_image[row][col] < 130)//大了灵敏130
+ 1722   2              {
+ 1723   3                  black_count++;
+ 1724   3              }
+ 1725   2          }
+ 1726   1          
+ 1727   1          /* 两个条件同时满足 */
+ 1728   1          if (total_count > 0 && (black_count * 100 / total_count) > 90)
+ 1729   1          {
+ 1730   2              flag.stop = 1;  /* 触发停车 */
+ 1731   2          }
+ 1732   1      }
+ 1733          
+ 1734          
+ 1735          /* ==================== 标靶检测宏定义 ==================== */
+ 1736          #define MIN_RING_WIDTH     1                 /* 圆环最小黑段宽度（像素） */
+ 1737          #define MAX_RING_WIDTH     6                 /* 圆环最大黑段宽度（像素） */
+ 1738          #define MAX_BLACK_SEGMENTS 10                /* 允许的最多有效黑段数（排除斑马线） */
+ 1739          #define START_ROW         35                 /* 扫描起始行（上方） */
+ 1740          #define END_ROW           (MT9V03X_H - 45)   /* 扫描结束行（下方） */
+ 1741          #define MIN_RING_GAP      5                  /* 左右最小置信宽度 */
+ 1742          #define MIN_CONFIRM_ROWS  5                  /* 最小置信行 */
+ 1743          uint8   FIRE_ROW_LOW=55;                 /* 打靶行号下限（下方行在此之上才打靶） */
+ 1744          uint8   FIRE_ROW_HIGH=57;                 /* 打靶行号上限（下方行在此之下才打靶） */
+ 1745          
+ 1746          void handle_daba2(void)
+ 1747          {
+ 1748   1          int16 row;
+ 1749   1          uint8 col;
+ 1750   1          uint8 in_black, seg_start, seg_len, seg_count;
+ 1751   1          uint8 first_start, first_end, second_start, second_end;
+ 1752   1          uint8 valid_ring_rows[30];
+ 1753   1          uint8 valid_ringrow_count;
+ 1754   1          uint8 down_row;
+ 1755   1          static uint8 target_active = 0;
+ 1756   1          static uint8 frame_cnt = 0;
+ 1757   1          static uint8 lost_count = 0;
+ 1758   1      
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 28  
+
+ 1759   1          frame_cnt++;
+ 1760   1      
+ 1761   1          /* ===== 第一步：逐行扫描，收集有效靶行 ===== */
+ 1762   1          valid_ringrow_count = 0;
+ 1763   1      
+ 1764   1          for (row = END_ROW; row >= START_ROW; row--)
+ 1765   1          {
+ 1766   2              in_black = 0;
+ 1767   2              seg_count = 0;
+ 1768   2              first_start = first_end = second_start = second_end = 0;
+ 1769   2      
+ 1770   2              for (col =l_line_x[row]; col <= r_line_x[row]; col++)
+ 1771   2              {
+ 1772   3                  if (mt9v03x_image[row][col] < white_min_point)
+ 1773   3                  {
+ 1774   4                      if (!in_black)
+ 1775   4                      {
+ 1776   5                          in_black = 1;
+ 1777   5                          seg_start = col;
+ 1778   5                          seg_len = 1;
+ 1779   5                      }
+ 1780   4                      else
+ 1781   4                      {
+ 1782   5                          seg_len++;
+ 1783   5                      }
+ 1784   4                  }
+ 1785   3                  else
+ 1786   3                  {
+ 1787   4                      if (in_black)
+ 1788   4                      {
+ 1789   5                          in_black = 0;
+ 1790   5      
+ 1791   5                          if (seg_len < MIN_RING_WIDTH || seg_len > MAX_RING_WIDTH)
+ 1792   5                          {
+ 1793   6                              seg_count = 0;
+ 1794   6                              break;
+ 1795   6                          }
+ 1796   5      
+ 1797   5                          seg_count++;
+ 1798   5      
+ 1799   5                          if (seg_count == 1)
+ 1800   5                          {
+ 1801   6                              first_start = seg_start;
+ 1802   6                              first_end = col - 1;
+ 1803   6                          }
+ 1804   5                          else if (seg_count == 2)
+ 1805   5                          {
+ 1806   6                              second_start = seg_start;
+ 1807   6                              second_end = col - 1;
+ 1808   6      
+ 1809   6                              if (second_start - first_end - 1 >= MIN_RING_GAP)
+ 1810   6                              {
+ 1811   7                                  if (valid_ringrow_count < 30)
+ 1812   7                                  {
+ 1813   8                                      valid_ring_rows[valid_ringrow_count] = (uint8)row;
+ 1814   8                                      valid_ringrow_count++;
+ 1815   8                                  }
+ 1816   7                              }
+ 1817   6                              break;
+ 1818   6                          } 
+ 1819   5                      }
+ 1820   4                  }
+ 1821   3              }
+ 1822   2          }
+ 1823   1      
+ 1824   1           //printf("[%d] valid=%d ", frame_cnt, valid_ringrow_count);
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 29  
+
+ 1825   1      
+ 1826   1          /* ===== 第二步：判断是否触发/退出打靶 ===== */
+ 1827   1          down_row = valid_ring_rows[valid_ringrow_count - 1];
+ 1828   1          printf("down_row=%d\n ", down_row);
+ 1829   1      
+ 1830   1          if (valid_ringrow_count < MIN_CONFIRM_ROWS || down_row < FIRE_ROW_LOW || down_row > FIRE_ROW_HIGH)
+ 1831   1          {
+ 1832   2              lost_count++;
+ 1833   2              if (lost_count > 1)
+ 1834   2              {
+ 1835   3                  target_active = 0;
+ 1836   3                  gpio_set_level(LASER_HEAD_PIN, 0);
+ 1837   3                  //if (valid_ringrow_count < MIN_CONFIRM_ROWS)
+ 1838   3                      //printf("OFF (rows<3)\n");
+ 1839   3                  //else
+ 1840   3                      //printf("OFF (out of range)\n");
+ 1841   3              }
+ 1842   2              else
+ 1843   2              {
+ 1844   3                  //printf("HOLD (lost=%d)\n", lost_count);
+ 1845   3              }
+ 1846   2              return;
+ 1847   2          }
+ 1848   1      
+ 1849   1          lost_count = 0;
+ 1850   1          target_active = 1;
+ 1851   1          gpio_set_level(LASER_HEAD_PIN, 1);
+ 1852   1          //printf("ON\n");
+ 1853   1      }
+ 1854          
+ 1855          /* ==================== 斑马线检测宏定义 ==================== */
+ 1856          #define ZEBRA_SCAN_START_ROW  (MT9V03X_H - 55)  /* 扫描起始行，靠近底部 */
+ 1857          #define ZEBRA_SCAN_END_ROW    (MT9V03X_H - 52)   /* 扫描结束行 */
+ 1858          #define ZEBRA_BLACK_MIN_WIDTH 1                 /* 黑段最小宽度，过滤噪点 */
+ 1859          #define ZEBRA_BLACK_MAX_WIDTH 10                /* 黑段最大宽度，防止把长边界算进去 */
+ 1860          #define ZEBRA_MIN_SEGMENTS    8                 /* 一行最少黑段数（正常赛道1-2，斑马线5+） */
+ 1861          #define ZEBRA_CONFIRM_ROWS    3                 /* 最少确认行数 */
+ 1862          #define ZEBRA_EXIT_DISTANCE   130.0f            /* 编码器积分退出距离，根据实际调整 */
+ 1863          void zebra_test(void)
+ 1864          {
+ 1865   1          int16 row;
+ 1866   1          uint8 col;
+ 1867   1          uint8 in_black;
+ 1868   1          uint8 seg_len;
+ 1869   1          uint8 seg_count;
+ 1870   1          uint8 valid_zebra_rows = 0;
+ 1871   1          uint16 sum_center = 0;
+ 1872   1          uint8 seg_start = 0;
+ 1873   1          uint8 first_center = 0;
+ 1874   1          uint8 last_center = 0;
+ 1875   1          uint8 has_first = 0;
+ 1876   1          
+ 1877   1          /* 已在斑马线、环岛或十字期间不重复检测 */
+ 1878   1          if (road_type.banmaxian || road_type.LeftCirque || road_type.RightCirque || road_type.Cross)
+ 1879   1              return;
+ 1880   1          
+ 1881   1          for (row = ZEBRA_SCAN_END_ROW; row >= ZEBRA_SCAN_START_ROW; row--)
+ 1882   1          {
+ 1883   2              in_black = 0;
+ 1884   2              seg_count = 0;
+ 1885   2              seg_len = 0;
+ 1886   2              has_first = 0;
+ 1887   2              
+ 1888   2              /* 从0到187全宽扫描，统计黑段个数并记录首尾黑段中心 */
+ 1889   2              for (col = 0; col < MT9V03X_W; col++)
+ 1890   2              {
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 30  
+
+ 1891   3                  if (mt9v03x_image[row][col] < white_min_point)
+ 1892   3                  {
+ 1893   4                      if (!in_black)
+ 1894   4                      {
+ 1895   5                          in_black = 1;
+ 1896   5                          seg_start = col;
+ 1897   5                          seg_len = 1;
+ 1898   5                      }
+ 1899   4                      else
+ 1900   4                      {
+ 1901   5                          seg_len++;
+ 1902   5                      }
+ 1903   4                  }
+ 1904   3                  else
+ 1905   3                  {
+ 1906   4                      if (in_black)
+ 1907   4                      {
+ 1908   5                          in_black = 0;
+ 1909   5      
+ 1910   5                          if (seg_len >= ZEBRA_BLACK_MIN_WIDTH && seg_len <= ZEBRA_BLACK_MAX_WIDTH)
+ 1911   5                          {
+ 1912   6                              seg_count++;
+ 1913   6                              if (!has_first)
+ 1914   6                              {
+ 1915   7                                  first_center = (seg_start + (col - 1)) / 2;
+ 1916   7                                  has_first = 1;
+ 1917   7                              }
+ 1918   6                              last_center = (seg_start + (col - 1)) / 2;
+ 1919   6                          }
+ 1920   5                          seg_len = 0;
+ 1921   5                      }
+ 1922   4                  }
+ 1923   3              }
+ 1924   2              
+ 1925   2              /* 行尾处理：如果最后一段是黑段 */
+ 1926   2              if (in_black && seg_len >= ZEBRA_BLACK_MIN_WIDTH && seg_len <= ZEBRA_BLACK_MAX_WIDTH)
+ 1927   2              {
+ 1928   3                  seg_count++;
+ 1929   3                  if (!has_first)
+ 1930   3                  {
+ 1931   4                      first_center = (seg_start + (MT9V03X_W - 1)) / 2;
+ 1932   4                      has_first = 1;
+ 1933   4                  }
+ 1934   3                  last_center = (seg_start + (MT9V03X_W - 1)) / 2;
+ 1935   3              }
+ 1936   2              
+ 1937   2              if (seg_count >= ZEBRA_MIN_SEGMENTS && has_first)
+ 1938   2              {
+ 1939   3                  valid_zebra_rows++;
+ 1940   3                  /* 该行首尾黑段中点作为该行斑马线中心 */
+ 1941   3                  sum_center += (first_center + last_center) / 2;
+ 1942   3              }
+ 1943   2          }
+ 1944   1          
+ 1945   1          /* 多行确认，触发斑马线状态 */      
+ 1946   1          if (valid_zebra_rows >= ZEBRA_CONFIRM_ROWS)
+ 1947   1          {
+ 1948   2              road_type.banmaxian = 1;
+ 1949   2              road_type.straight = 0;
+ 1950   2              road_type.bend = 0;
+ 1951   2              road_type.ruwan = 0;
+ 1952   2              get_distance = 1;      /* 启动编码器积分 */
+ 1953   2              annulus_s1 = 0;        /* 清零，重新计数 */
+ 1954   2              
+ 1955   2              /* 计算斑马线中心横坐标（多行平均） */
+ 1956   2              if (valid_zebra_rows > 0)
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 31  
+
+ 1957   2              {
+ 1958   3                  zebra_center_x = (uint8)(sum_center / valid_zebra_rows);
+ 1959   3                  zebra_center_valid = 1;
+ 1960   3              }
+ 1961   2          }
+ 1962   1      }
+ 1963          uint8 ban_count=0;
+ 1964          void Handle_Zebra(void)
+ 1965          {
+ 1966   1          if(road_type.banmaxian){
+ 1967   2              /* printf("banmaxian!!!\n"); */
+ 1968   2          }
+ 1969   1          if (!road_type.banmaxian)
+ 1970   1              return;
+ 1971   1          if (annulus_s1 > ZEBRA_EXIT_DISTANCE)
+ 1972   1          {
+ 1973   2              road_type.banmaxian = 0;
+ 1974   2              get_distance = 0;
+ 1975   2              annulus_s1 = 0;
+ 1976   2              zebra_center_valid = 0;  /* 退出斑马线后清零 */
+ 1977   2                      ban_count++;
+ 1978   2          }
+ 1979   1      }
+*** WARNING C183 IN LINE 72 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 73 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 77 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 106 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 107 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 111 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 316 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 317 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 440 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 482 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 607 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 608 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 609 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 610 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1480 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1715 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1768 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1768 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1768 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1801 OF image.c: dead assignment eliminated
+*** WARNING C183 IN LINE 1807 OF image.c: dead assignment eliminated
+*** WARNING C184 IN LINE 1782 OF image.c: value of 'seg_len' possibly undefined
+*** WARNING C184 IN LINE 1791 OF image.c: value of 'seg_len' possibly undefined
+*** WARNING C184 IN LINE 1791 OF image.c: value of 'seg_len' possibly undefined
+*** WARNING C184 IN LINE 1806 OF image.c: value of 'seg_start' possibly undefined
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+  code size            =    ------     ------
+  ecode size           =     10727     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =      1582        171
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+C251 COMPILER V5.60.0,  image                                                              08/11/26  15:04:34  PAGE 32  
+
+  hconst size          =       894     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  25 WARNING(S),  0 ERROR(S)

@@ -1,0 +1,400 @@
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE menu
+OBJECT MODULE PLACED IN .\out_file\menu.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE menu.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR(..
+                    -\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\cod
+                    -e;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_file\
+                    -menu.lst) OBJECT(.\out_file\menu.obj) 
+
+stmt  level    source
+
+    1          /****************************************************************************************************
+    2          * 文件名称        menu.c
+    3          * 适用平台        STC32G144K246（Ai8052U），MDK FOR C251
+    4          * 功能说明        菜单框架 + Flash 断电保护实现
+    5          * 修改记录
+    6          * 2026-07-18      V1.1 集成 Flash 断电保护
+    7          * 2026-07-22      V1.2 Create_Menu_Number 增加 step 参数
+    8          ****************************************************************************************************/
+    9          
+   10          #include "menu.h"
+   11          #include "flash.h"
+   12          #include <string.h>
+   13          
+   14          #define MENU_FLASH_INVALID  (0xFFFFFFFFUL)
+   15          
+   16          #ifndef MENU_FLASH_BUF_SIZE
+   17          #define MENU_FLASH_BUF_SIZE (512)
+   18          #endif
+   19          
+   20          static uint8 menu_flash_buf[MENU_FLASH_BUF_SIZE];
+   21          
+   22          /*----------------------------------------------------------------------------------------------------
+   23          * 获取某种参数类型占用的字节数
+   24          ----------------------------------------------------------------------------------------------------*/
+   25          uint8 menu_flash_get_size(MENU_KIND kind)
+   26          {
+   27   1          switch (kind)
+   28   1          {
+   29   2              case int32_Box:  return (uint8)sizeof(int32);
+   30   2              case uint32_Box: return (uint8)sizeof(uint32);
+   31   2              case int16_Box:  return (uint8)sizeof(int16);
+   32   2              case uint16_Box: return (uint8)sizeof(uint16);
+   33   2              case int8_Box:   return (uint8)sizeof(int8);
+   34   2              case uint8_Box:  return (uint8)sizeof(uint8);
+   35   2              case float_Box:  return (uint8)sizeof(float);
+   36   2              default:         return 0;
+   37   2          }
+   38   1      }
+   39          
+   40          /*----------------------------------------------------------------------------------------------------
+   41          * 创建菜单项（内部函数）
+   42          ----------------------------------------------------------------------------------------------------*/
+   43          static void Creat_Menu_Item(Menu_Item* father, Menu_Item* me, const char nam[], void *dat, MENU_KIND kind
+             -)
+   44          {
+   45   1          Menu_Item* p;
+   46   1      
+   47   1          if(father->kind != MENU_Folder) return;
+   48   1      
+   49   1          me->nam = nam;
+   50   1          me->sons = 0;
+   51   1          me->select = 0;
+   52   1      
+   53   1          me->first_son = NULL;
+   54   1          me->next_brother = NULL;
+   55   1          me->last_brother = NULL;
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 2   
+
+   56   1      
+   57   1          me->dat = dat;
+   58   1          me->kind = kind;
+   59   1      
+   60   1          me->father = father;
+   61   1      
+   62   1          me->flash_addr = MENU_FLASH_INVALID;
+   63   1          me->action = NULL;
+   64   1          me->step = 1.0f;
+   65   1      
+   66   1          if (father->sons == 0)
+   67   1          {
+   68   2              father->first_son = me;
+   69   2          }
+   70   1          else
+   71   1          {
+   72   2              p = father->first_son;
+   73   2              while (p->next_brother != NULL)
+   74   2              {
+   75   3                  p = p->next_brother;
+   76   3              }
+   77   2              p->next_brother = me;
+   78   2              me->last_brother = p;
+   79   2          }
+   80   1          me->No = father->sons;
+   81   1          father->sons++;
+   82   1      }
+   83          
+   84          void Creat_Menu_Folder(Menu_Item* father, Menu_Item* me, const char nam[])
+   85          {
+   86   1          Creat_Menu_Item(father, me, nam, NULL, MENU_Folder);
+   87   1      }
+   88          
+   89          void Create_Menu_Number(Menu_Item* father, Menu_Item* me, const char nam[], void *dat, MENU_KIND kind, fl
+             -oat step)
+   90          {
+   91   1          Creat_Menu_Item(father, me, nam, dat, kind);
+   92   1          me->step = step;
+   93   1      }
+   94          
+   95          void Create_Menu_Action(Menu_Item* father, Menu_Item* me, const char nam[], void (*action)(void))
+   96          {
+   97   1          Creat_Menu_Item(father, me, nam, NULL, MENU_Action);
+   98   1          me->action = action;
+   99   1      }
+  100          
+  101          /*================================== 以下为 Flash 断电保护内部实现 ==================================*/
+  102          
+  103          static void menu_walk(Menu_Item *item, void (*cb)(Menu_Item *, void *), void *arg)
+  104          {
+  105   1          Menu_Item *s;
+  106   1      
+  107   1          s = item->first_son;
+  108   1          while (s != NULL)
+  109   1          {
+  110   2              cb(s, arg);
+  111   2              if (s->sons > 0)
+  112   2              {
+  113   3                  menu_walk(s, cb, arg);
+*** WARNING C190 IN LINE 113 OF menu.c: 'menu_walk': recursive call to non-reentrant function
+  114   3              }
+  115   2              s = s->next_brother;
+  116   2          }
+  117   1      }
+  118          
+  119          static void menu_layout_cb(Menu_Item *item, void *arg)
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 3   
+
+  120          {
+  121   1          uint32 *offset;
+  122   1          uint8  size;
+  123   1      
+  124   1          offset = (uint32 *)arg;
+  125   1          size = menu_flash_get_size(item->kind);
+  126   1      
+  127   1          if ((item->dat != NULL) && (size > 0))
+  128   1          {
+  129   2              item->flash_addr = MENU_FLASH_BASE_ADDR + MENU_FLASH_HEADER_SIZE + *offset;
+  130   2              *offset += size;
+  131   2          }
+  132   1          else
+  133   1          {
+  134   2              item->flash_addr = MENU_FLASH_INVALID;
+  135   2          }
+  136   1      }
+  137          
+  138          static uint32 menu_layout(Menu_Item *root)
+  139          {
+  140   1          uint32 offset;
+  141   1      
+  142   1          offset = 0;
+  143   1          menu_walk(root, menu_layout_cb, &offset);
+  144   1          return offset;
+  145   1      }
+  146          
+  147          static void menu_pack_cb(Menu_Item *item, void *arg)
+  148          {
+  149   1          uint8  *buf;
+  150   1          uint8  *src;
+  151   1          uint8  size;
+  152   1          uint8  i;
+  153   1          uint32 pos;
+  154   1      
+  155   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  156   1      
+  157   1          buf  = (uint8 *)arg;
+  158   1          src  = (uint8 *)item->dat;
+  159   1          size = menu_flash_get_size(item->kind);
+  160   1          pos  = item->flash_addr - MENU_FLASH_BASE_ADDR;
+  161   1      
+  162   1          for (i = 0; i < size; i++)
+  163   1          {
+  164   2              buf[pos + i] = src[i];
+  165   2          }
+  166   1      }
+  167          
+  168          static void menu_unpack_cb(Menu_Item *item, void *arg)
+  169          {
+  170   1          uint8  *buf;
+  171   1          uint8  *dst;
+  172   1          uint8  size;
+  173   1          uint8  i;
+  174   1          uint32 pos;
+  175   1      
+  176   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  177   1      
+  178   1          buf  = (uint8 *)arg;
+  179   1          dst  = (uint8 *)item->dat;
+  180   1          size = menu_flash_get_size(item->kind);
+  181   1          pos  = item->flash_addr - MENU_FLASH_BASE_ADDR;
+  182   1      
+  183   1          for (i = 0; i < size; i++)
+  184   1          {
+  185   2              dst[i] = buf[pos + i];
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 4   
+
+  186   2          }
+  187   1      }
+  188          
+  189          static void menu_sum_cb(Menu_Item *item, void *arg)
+  190          {
+  191   1          uint32 *sum;
+  192   1          uint8  *src;
+  193   1          uint8  size;
+  194   1          uint8  i;
+  195   1      
+  196   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  197   1      
+  198   1          sum  = (uint32 *)arg;
+  199   1          src  = (uint8 *)item->dat;
+  200   1          size = menu_flash_get_size(item->kind);
+  201   1      
+  202   1          for (i = 0; i < size; i++)
+  203   1          {
+  204   2              *sum += src[i];
+  205   2          }
+  206   1      }
+  207          
+  208          static void menu_sum_read_cb(Menu_Item *item, void *arg)
+  209          {
+  210   1          uint32 *sum;
+  211   1          uint8  temp[8];
+  212   1          uint8  size;
+  213   1          uint8  i;
+  214   1      
+  215   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  216   1      
+  217   1          sum  = (uint32 *)arg;
+  218   1          size = menu_flash_get_size(item->kind);
+  219   1      
+  220   1          if (Flash_Read_Buff(item->flash_addr, temp, size) != FLASH_OK) return;
+  221   1          for (i = 0; i < size; i++)
+  222   1          {
+  223   2              *sum += temp[i];
+  224   2          }
+  225   1      }
+  226          
+  227          static void menu_read_item_cb(Menu_Item *item, void *arg)
+  228          {
+  229   1          uint8 size;
+  230   1      
+  231   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  232   1      
+  233   1          size = menu_flash_get_size(item->kind);
+  234   1          Flash_Read_Buff(item->flash_addr, (uint8 *)item->dat, size);
+  235   1          (void)arg;
+*** WARNING C138 IN LINE 235 OF menu.c: expression with possibly no effect
+  236   1      }
+  237          
+  238          static void menu_save_item_cb(Menu_Item *item, void *arg)
+  239          {
+  240   1          uint8 size;
+  241   1      
+  242   1          if ((item->dat == NULL) || (item->flash_addr == MENU_FLASH_INVALID)) return;
+  243   1      
+  244   1          size = menu_flash_get_size(item->kind);
+  245   1          Flash_Write_Buff(item->flash_addr, (uint8 *)item->dat, size);
+  246   1          (void)arg;
+*** WARNING C138 IN LINE 246 OF menu.c: expression with possibly no effect
+  247   1      }
+  248          
+  249          FLASH_STA menu_load_from_flash(Menu_Item *root)
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 5   
+
+  250          {
+  251   1          uint32 total;
+  252   1          uint32 sum;
+  253   1          uint32 i;
+  254   1          FLASH_STA sta;
+  255   1      
+  256   1          total = menu_layout(root);
+  257   1          if (total == 0) return FLASH_NO_DATA;
+  258   1      
+  259   1          if ((total + MENU_FLASH_HEADER_SIZE) <= MENU_FLASH_BUF_SIZE)
+  260   1          {
+  261   2              sta = Flash_Read_Buff(MENU_FLASH_BASE_ADDR, menu_flash_buf,
+  262   2                                    total + MENU_FLASH_HEADER_SIZE);
+  263   2              if (sta != FLASH_OK) return sta;
+  264   2      
+  265   2              if ((menu_flash_buf[0] != (uint8)(MENU_FLASH_MAGIC & 0xFF)) ||
+  266   2                  (menu_flash_buf[1] != (uint8)(MENU_FLASH_MAGIC >> 8)))  return FLASH_NO_DATA;
+  267   2              if (menu_flash_buf[2] != MENU_FLASH_VERSION)                return FLASH_NO_DATA;
+  268   2      
+  269   2              sum = 0;
+  270   2              for (i = MENU_FLASH_HEADER_SIZE; i < total + MENU_FLASH_HEADER_SIZE; i++)
+  271   2              {
+  272   3                  sum += menu_flash_buf[i];
+  273   3              }
+  274   2              if (menu_flash_buf[3] != (uint8)(sum & 0xFF))               return FLASH_DATA_ERR;
+  275   2      
+  276   2              menu_walk(root, menu_unpack_cb, menu_flash_buf);
+  277   2          }
+  278   1          else
+  279   1          {
+  280   2              uint8 head[MENU_FLASH_HEADER_SIZE];
+  281   2      
+  282   2              sta = Flash_Read_Buff(MENU_FLASH_BASE_ADDR, head, MENU_FLASH_HEADER_SIZE);
+  283   2              if (sta != FLASH_OK) return sta;
+  284   2              if ((head[0] != (uint8)(MENU_FLASH_MAGIC & 0xFF)) ||
+  285   2                  (head[1] != (uint8)(MENU_FLASH_MAGIC >> 8)))              return FLASH_NO_DATA;
+  286   2              if (head[2] != MENU_FLASH_VERSION)                            return FLASH_NO_DATA;
+  287   2      
+  288   2              sum = 0;
+  289   2              menu_walk(root, menu_sum_read_cb, &sum);
+  290   2              if (head[3] != (uint8)(sum & 0xFF))                           return FLASH_DATA_ERR;
+  291   2      
+  292   2              menu_walk(root, menu_read_item_cb, NULL);
+  293   2          }
+  294   1      
+  295   1          return FLASH_OK;
+  296   1      }
+  297          
+  298          FLASH_STA menu_save_to_flash(Menu_Item *root)
+  299          {
+  300   1          uint32 total;
+  301   1          uint32 sum;
+  302   1          uint32 i;
+  303   1          uint8  head[MENU_FLASH_HEADER_SIZE];
+  304   1          FLASH_STA sta;
+  305   1      
+  306   1          total = menu_layout(root);
+  307   1          if (total == 0) return FLASH_NO_DATA;
+  308   1      
+  309   1          sum = 0;
+  310   1          menu_walk(root, menu_sum_cb, &sum);
+  311   1      
+  312   1          head[0] = (uint8)(MENU_FLASH_MAGIC & 0xFF);
+  313   1          head[1] = (uint8)(MENU_FLASH_MAGIC >> 8);
+  314   1          head[2] = MENU_FLASH_VERSION;
+  315   1          head[3] = (uint8)(sum & 0xFF);
+C251 COMPILER V5.60.0,  menu                                                               08/11/26  15:04:36  PAGE 6   
+
+  316   1      
+  317   1          if ((total + MENU_FLASH_HEADER_SIZE) <= MENU_FLASH_BUF_SIZE)
+  318   1          {
+  319   2              for (i = 0; i < MENU_FLASH_HEADER_SIZE; i++)
+  320   2              {
+  321   3                  menu_flash_buf[i] = head[i];
+  322   3              }
+  323   2              menu_walk(root, menu_pack_cb, menu_flash_buf);
+  324   2              sta = Flash_Write_Buff(MENU_FLASH_BASE_ADDR, menu_flash_buf, total + MENU_FLASH_HEADER_SIZE);
+  325   2              return sta;
+  326   2          }
+  327   1          else
+  328   1          {
+  329   2              sta = Flash_Write_Buff(MENU_FLASH_BASE_ADDR, head, MENU_FLASH_HEADER_SIZE);
+  330   2              if (sta != FLASH_OK) return sta;
+  331   2              menu_walk(root, menu_save_item_cb, NULL);
+  332   2              return FLASH_OK;
+  333   2          }
+  334   1      }
+  335          
+  336          void menu_erase_flash(Menu_Item *root)
+  337          {
+  338   1          uint32 total;
+  339   1          uint32 addr;
+  340   1          uint32 end;
+  341   1      
+  342   1          total = menu_layout(root) + MENU_FLASH_HEADER_SIZE;
+  343   1          end   = MENU_FLASH_BASE_ADDR + total;
+  344   1      
+  345   1          for (addr = MENU_FLASH_BASE_ADDR; addr < end; addr += MENU_FLASH_SECTOR_SIZE)
+  346   1          {
+  347   2              Flash_Iap_Erase_Sector(addr);
+  348   2          }
+  349   1      }
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+  code size            =    ------     ------
+  ecode size           =      2225     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =       512        119
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+  hconst size          =    ------     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  3 WARNING(S),  0 ERROR(S)

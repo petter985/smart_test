@@ -1,0 +1,131 @@
+C251 COMPILER V5.60.0,  eeprom                                                             18/07/26  16:31:19  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE eeprom
+OBJECT MODULE PLACED IN .\out_file\eeprom.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE eeprom.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR(
+                    -..\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\c
+                    -ode;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_fil
+                    -e\eeprom.lst) TABS(2) OBJECT(.\out_file\eeprom.obj) 
+
+stmt  level    source
+
+    1          #include "eeprom.h"
+    2          
+    3          #define IAP_CMD_READ   1
+    4          #define IAP_CMD_WRITE  2
+    5          #define IAP_CMD_ERASE  3
+    6          
+    7          /* 设置 IAP 操作地址（17 位，最大 128K） */
+    8          static void iap_set_addr(uint32 addr)
+    9          {
+   10   1          if (addr < 0x10000)
+   11   1          {
+   12   2              IAP_ADDRH = (addr >> 8) & 0x7F;   // A15-A8，最高位为 0
+   13   2              IAP_ADDRL = addr & 0xFF;
+   14   2          }
+   15   1          else
+   16   1          {
+   17   2              IAP_ADDRH = ((addr >> 8) & 0x7F) | 0x80; // A16=1
+   18   2              IAP_ADDRL = addr & 0xFF;
+   19   2          }
+   20   1      }
+   21          
+   22          /* 等待 IAP 完成，并关闭 IAP 使能 */
+   23          static void iap_wait(void)
+   24          {
+   25   1          while (IAP_CONTR & 0x80);
+   26   1          IAP_CONTR &= ~0x80;
+   27   1      }
+   28          
+   29          /* 触发 IAP 命令 */
+   30          static void iap_trigger(void)
+   31          {
+   32   1          IAP_TRIG = 0x5A;
+   33   1          IAP_TRIG = 0xA5;
+   34   1      }
+   35          
+   36          /* 初始化 IAP（根据主频调整等待周期） */
+   37          void iap_init(void)
+   38          {
+   39   1          // 假设主频 24MHz，若主频更高可设 IAP_CONTR = 0x81 等
+   40   1          IAP_CONTR = 0x80;   // 使能 IAP，等待周期 = 0
+   41   1      }
+   42          
+   43          /* 读一个字节 */
+   44          uint8 iap_read_byte(uint32 addr)
+   45          {
+   46   1          uint8 dat;
+   47   1          IAP_CONTR |= 0x80;
+   48   1          IAP_CMD    = IAP_CMD_READ;
+   49   1          iap_set_addr(addr);
+   50   1          iap_trigger();
+   51   1          iap_wait();
+   52   1          dat = IAP_DATA;
+   53   1          return dat;
+   54   1      }
+   55          
+   56          /* 擦除一个扇区（512 字节） */
+C251 COMPILER V5.60.0,  eeprom                                                             18/07/26  16:31:19  PAGE 2   
+
+   57          void iap_erase_sector(uint32 addr)
+   58          {
+   59   1          IAP_CONTR |= 0x80;
+   60   1          IAP_CMD    = IAP_CMD_ERASE;
+   61   1          iap_set_addr(addr);
+   62   1          iap_trigger();
+   63   1          iap_wait();
+   64   1      }
+   65          
+   66          /* 写一个字节（必须先擦除为 0xFF） */
+   67          void iap_write_byte(uint32 addr, uint8 dat)
+   68          {
+   69   1          IAP_CONTR |= 0x80;
+   70   1          IAP_CMD    = IAP_CMD_WRITE;
+   71   1          iap_set_addr(addr);
+   72   1          IAP_DATA   = dat;
+   73   1          iap_trigger();
+   74   1          iap_wait();
+   75   1      }
+   76          
+   77          /* 批量读 */
+   78          void iap_read_buff(uint32 addr, uint8 *buff, uint16 len)
+   79          {
+   80   1          while (len--)
+   81   1          {
+   82   2              *buff++ = iap_read_byte(addr++);
+   83   2          }
+   84   1      }
+   85          
+   86          /* 批量写 */
+   87          void iap_write_buff(uint32 addr, uint8 *buff, uint16 len)
+   88          {
+   89   1          while (len--)
+   90   1          {
+   91   2              iap_write_byte(addr++, *buff++);
+   92   2          }
+   93   1      }
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+  code size            =    ------     ------
+  ecode size           =       248     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =    ------         12
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+  hconst size          =    ------     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)

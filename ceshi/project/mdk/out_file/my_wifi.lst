@@ -1,0 +1,159 @@
+C251 COMPILER V5.60.0,  my_wifi                                                            08/11/26  15:04:38  PAGE 1   
+
+
+C251 COMPILER V5.60.0, COMPILATION OF MODULE my_wifi
+OBJECT MODULE PLACED IN .\out_file\my_wifi.obj
+COMPILER INVOKED BY: D:\Keil_v5\C251\BIN\C251.EXE my_wifi.c LARGE ROM(HUGE) WARNINGLEVEL(3) OPTIMIZE(SIZE) BROWSE INCDIR
+                    -(..\..\libraries\zf_common;..\..\libraries\zf_components;..\..\libraries\zf_device;..\..\libraries\zf_driver;..\user;..\
+                    -code;..\..\libraries\zf_components\stc32g_usb_lib;..\..\libraries\zf_components\seekfree_assistant) DEBUG PRINT(.\out_fi
+                    -le\my_wifi.lst) OBJECT(.\out_file\my_wifi.obj) 
+
+stmt  level    source
+
+    1          #include "my_wifi.h"
+    2          #include "zf_common_headfile.h" 
+    3          #include "seekfree_assistant.h"
+    4          extern uint8 time_test;
+    5          #define WIFI_SSID_TEST          "readme"
+    6          #define WIFI_PASSWORD_TEST      "34567821"
+    7          
+    8          //#define WIFI_SSID_TEST          "Runner"
+    9          //#define WIFI_PASSWORD_TEST      "060920tr"
+   10          int temp8=0;
+   11          //-------------------------------------------------------------------------------------------------------
+             -------------
+   12          // ???????     ????????????????? + ???
+   13          //-------------------------------------------------------------------------------------------------------
+             -------------
+   14          static void my_wifi_parameter_handler(void)
+   15          {
+   16   1          uint8 i;
+   17   1          static uint32 call_count = 0;
+   18   1          
+   19   1          call_count++;
+   20   1          
+   21   1          // ? 50 ????????
+   22   1          if(call_count % 50 == 0)
+   23   1          {
+   24   2              printf("[WiFi] handler running... %ld\r\n", call_count);
+   25   2          }
+   26   1          
+   27   1          seekfree_assistant_data_analysis();
+   28   1          
+   29   1          for(i = 0; i < SEEKFREE_ASSISTANT_SET_PARAMETR_COUNT; i++)
+   30   1          {
+   31   2              if(seekfree_assistant_parameter_update_flag[i])
+   32   2              {
+   33   3                  printf(">>> GOT DATA! CH%d = %f <<<\r\n", i, seekfree_assistant_parameter[i]);
+   34   3                  seekfree_assistant_parameter_update_flag[i] = 0;
+   35   3                  
+   36   3                  switch(i)
+   37   3                  {
+   38   4                      case 0:  temp8 = seekfree_assistant_parameter[0];  break;
+   39   4                      case 1:  servo_pid.Kd = seekfree_assistant_parameter[1];  break;
+   40   4                      case 2:  motor_pid_l.Kp = seekfree_assistant_parameter[2];  break;
+   41   4                      case 3:  motor_pid_r.Ki = seekfree_assistant_parameter[3];  break;
+   42   4                      default: break;
+   43   4                  }
+   44   3              }
+   45   2          }
+   46   1      }
+   47          //-------------------------------------------------------------------------------------------------------
+             -------------
+   48          // ???????     WiFi ?????????????????????
+   49          //-------------------------------------------------------------------------------------------------------
+             -------------
+   50          void my_wifi_init()
+   51          {
+   52   1          while(wifi_spi_init(WIFI_SSID_TEST, WIFI_PASSWORD_TEST))
+C251 COMPILER V5.60.0,  my_wifi                                                            08/11/26  15:04:38  PAGE 2   
+
+   53   1          {
+   54   2              printf("\r\n connect wifi failed. \r\n");
+   55   2              system_delay_ms(100);
+   56   2          }
+   57   1      
+   58   1          printf("\r\n module version:%s", wifi_spi_version);
+   59   1          printf("\r\n module mac    :%s", wifi_spi_mac_addr);
+   60   1          printf("\r\n module ip     :%s", wifi_spi_ip_addr_port);
+   61   1      
+   62   1          if(1 != WIFI_SPI_AUTO_CONNECT)
+   63   1          {
+   64   2              while(wifi_spi_socket_connect(
+   65   2                  "TCP",
+   66   2                  WIFI_SPI_TARGET_IP,
+   67   2                  WIFI_SPI_TARGET_PORT,
+   68   2                  WIFI_SPI_LOCAL_PORT))
+   69   2              {
+   70   3                  printf("\r\n Connect TCP Servers error, try again.");
+   71   3                  system_delay_ms(100);
+   72   3              }
+   73   2          }
+   74   1          
+   75   1          seekfree_assistant_interface_init(SEEKFREE_ASSISTANT_WIFI_SPI);//mt9v03x_ima ge,image_01
+   76   1          seekfree_assistant_camera_information_config(SEEKFREE_ASSISTANT_MT9V03X, mt9v03x_image, MT9V03X_W, MT
+             -9V03X_H);
+   77   1                      seekfree_assistant_camera_boundary_config(X_BOUNDARY, MT9V03X_H, l_line_x, r_line_x, m_line_x, NULL, NU
+             -LL ,NULL);
+   78   1      }
+   79          void boxing()
+   80          {
+   81   1              seekfree_assistant_oscilloscope_data.dat[0] =motor_l.encoder_speed;
+   82   1              seekfree_assistant_oscilloscope_data.dat[1] =motor_r.encoder_speed;
+   83   1              seekfree_assistant_oscilloscope_data.dat[2] =left_target;
+   84   1                                      seekfree_assistant_oscilloscope_data.dat[3] =right_target;
+   85   1                                      seekfree_assistant_oscilloscope_data.dat[4] =time_test;
+   86   1              // ??????????????????????????
+   87   1              seekfree_assistant_oscilloscope_data.channel_num = 5;
+   88   1      
+   89   1              // ???????????4??????????????????8???
+   90   1              seekfree_assistant_oscilloscope_send(&seekfree_assistant_oscilloscope_data);
+   91   1      
+   92   1              // ????????????????????????????G??????????????????????WIFI???????????????
+   93   1      
+   94   1              // ???????????????????????????????????????seekfree_assistant_oscilloscope_data???????????????????
+             -????????????
+   95   1              // ??????????????????????????????????????????????????????????????????????????????????????????20ms
+   96   1              seekfree_assistant_data_analysis();
+   97   1      }
+   98          //-------------------------------------------------------------------------------------------------------
+             -------------
+   99          // ???????     WiFi ?????????
+  100          //-------------------------------------------------------------------------------------------------------
+             -------------
+  101          void my_wifi_process()
+  102          {
+  103   1          // ????????
+  104   1          //my_wifi_parameter_handler();
+  105   1          // ???????
+  106   1          seekfree_assistant_camera_send();
+  107   1              //??????
+  108   1          //boxing();
+  109   1      }
+*** WARNING C174 IN LINE 14 OF my_wifi.c: 'my_wifi_parameter_handler': unreferenced 'static' function
+
+
+Module Information          Static   Overlayable
+------------------------------------------------
+C251 COMPILER V5.60.0,  my_wifi                                                            08/11/26  15:04:38  PAGE 3   
+
+  code size            =    ------     ------
+  ecode size           =       768     ------
+  data size            =    ------     ------
+  idata size           =    ------     ------
+  pdata size           =    ------     ------
+  xdata size           =         6     ------
+  xdata-const size     =    ------     ------
+  edata size           =    ------     ------
+  bit size             =    ------     ------
+  ebit size            =    ------     ------
+  bitaddressable size  =    ------     ------
+  ebitaddressable size =    ------     ------
+  far data size        =    ------     ------
+  huge data size       =    ------     ------
+  const size           =    ------     ------
+  hconst size          =       254     ------
+End of Module Information.
+
+
+C251 COMPILATION COMPLETE.  1 WARNING(S),  0 ERROR(S)
