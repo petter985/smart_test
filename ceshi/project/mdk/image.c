@@ -218,7 +218,7 @@ void image_process(void)
 		Check_Out();
         if (flag.image_show)
         {
-            //Blacking();
+            Blacking();
             //ips200_show_int8(0, 0, final_mid_line - MID_W);
         }
         mt9v03x_finish_flag = 0;

@@ -8,7 +8,7 @@ motor1 motor_l = {0};  /* ?????? */
 motor1 motor_r = {0};  /* ?????? */
 
 int g_base_speed = 165;
-float zhi_speed=190;
+float zhi_speed=180;
 float wan_speed=170;
 float ruwan_speed=170;
 float huandao_speed=150;

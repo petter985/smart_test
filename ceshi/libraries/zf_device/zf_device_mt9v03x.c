@@ -49,7 +49,7 @@
 #include "zf_device_mt9v03x_dma.h"
 
 
-int MT9V03X_EXP_TIME_DEF = 600; 
+int MT9V03X_EXP_TIME_DEF = 200; 
 
 // 需要配置到摄像头的数据（去掉 const，改为普通数组，在函数中赋值）
 int16 mt9v03x_set_confing_buffer[MT9V03X_CONFIG_FINISH][2];

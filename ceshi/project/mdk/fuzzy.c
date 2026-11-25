@@ -6,13 +6,24 @@
 #include "zf_common_headfile.h"   
 
 float kp_m = 0;    // 基础KP+
-float kd_m = 2000;      // 模糊D强度系数
-float beid_spk = 175;  // 模糊强度系数
+float kd_m = 386;      // 模糊D强度系数
+float beid_spk = 150;  // 模糊强度系数
 float ruwan_p_zengyi=0;//入弯p的直接增强量 
-float wandao_p_zengyi=0;//弯道p的直接增强量
-float zhidao_p_yizhi=40;//直道p的直接抑制量
-float else_p_yizhi=20;//其他p的直接抑制量
+float wandao_p_zengyi=40;//弯道p的直接增强量
+float zhidao_p_yizhi=30;//直道p的直接抑制量
+float else_p_yizhi=25;//其他p的直接抑制量
 
+
+/*
+float kp_m = 25;    // 基础KP+
+float kd_m = 386
+	;      // 模糊D强度系数
+float beid_spk = 125 ;  // 模糊强度系数
+float ruwan_p_zengyi=0;//入弯p的直接增强量 
+float wandao_p_zengyi=40;//弯道p的直接增强量
+float zhidao_p_yizhi=30;//直道p的直接抑制量
+float else_p_yizhi=25;//其他p的直接抑制量
+*/
 // ============================================================
 // 1. 模糊边界定义
 // ============================================================
@@ -58,7 +69,7 @@ float KD_Fuzzy(float E, float EC, float E_RANGEMAX, float EC_RANGEMAX, float kd_
         {0, 0, 1, 1, 1, 2, 2}
     };
 
-    static const float outputLevelScales[7] = {0.50f, 0.50f, 0.65f, 0.75f, 0.85f, 0.95f, 1.0f};
+    static const float outputLevelScales[7] = {0.60f, 0.60f, 0.65f, 0.75f, 0.85f, 0.95f, 1.0f};
     
     int i;
     uint8 i2;
@@ -204,10 +215,10 @@ float KP_Fuzzy(float E, float EC, float E_RANGEMAX, float EC_RANGEMAX, float kp_
         {2, 1, 1, 0, 1, 1, 2},
         {2, 1, 0, 1, 2, 3, 4},
         {0, 0, 2, 3, 3, 4, 6},
-        {0, 0, 3, 4, 4, 5, 6}
+        {0, 1, 3, 4, 4, 5, 6}
     };
 
-    static const float outputLevelScales[7] = {0.2f, 0.45f, 0.7f, 0.8f, 0.88f, 0.92f, 1.0f};
+    static const float outputLevelScales[7] = {0.25f, 0.45f, 0.7f, 0.8f, 0.88f, 0.92f, 1.0f};
     
     int i;
     uint8 i2;
