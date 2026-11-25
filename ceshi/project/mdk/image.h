@@ -39,6 +39,11 @@ extern uint8 white_min_point;       /* 白色下限 */
 
 /* ==================== 图像处理函数 ==================== */
 void get_reference_point(const uint8 *image);
+/* In-place conversion of a fresh grayscale frame to 0/1; returns its threshold. */
+uint8 Binarize_Mt9v03x_Image(void);
+/* Gamma is optional; image_gamma_value is gamma * 100 (100 means 1.0). */
+extern uint8 image_gamma_enable;
+extern uint8 image_gamma_value;
 uint8 search_left_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start);
 uint8 search_right_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start);
 void Search_edge(void);

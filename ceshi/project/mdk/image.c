@@ -1,5 +1,6 @@
 #include "image.h"
 #include "string.h"
+#include "math.h"
 uint8 diuxian_sum = 0;
 uint8 MID_W=91;/*改这个下面3个都要改动！！！！*/
 float final_mid_line = 91;
@@ -17,6 +18,16 @@ uint8 type2=0;//左环岛避免越界的操作
 #define DIFF_RATIO_THRESHOLD 20
 #define SEARCH_OFFSET       5
 #define STOP_BLACK_ROWS     3
+#define BINARY_OTSU_CROP_TOP       25
+#define BINARY_OTSU_CROP_LEFT      44
+#define BINARY_OTSU_CROP_HEIGHT    70
+#define BINARY_OTSU_CROP_WIDTH     110
+#define BINARY_OTSU_ROW_STEP       3
+#define BINARY_OTSU_COL_STEP       5
+#define BINARY_OTSU_DARK_MIN       40
+#define BINARY_OTSU_MIN_THRESHOLD  100
+#define BINARY_OTSU_MIN_DIFF       25
+#define BINARY_OTSU_GRAY_STEP      4
 
 void Calculate_Offset_1(void);
 
@@ -43,6 +54,8 @@ uint8 r_losemax,l_losemax;
 uint8 reference_point = 128;
 uint8 white_max_point = 200;
 uint8 white_min_point = 70;
+uint8 image_gamma_enable = 0;
+uint8 image_gamma_value = 100;
 
 //uint8 image_01[MT9V03X_H][MT9V03X_W];
 uint8 kuandu_saidao[MT9V03X_H - 1] = {
@@ -190,12 +203,12 @@ void image_process(void)
         //Transfer_Camera();
         mt9v03x_finish_flag = 0;
         clean();//把上次搜线结果归零，避免影响环岛等处理
-			
+		
         //ips200_show_int8(0, 0, white_min_point);
 		
         Search_edge();
         Element_Test();
-			  
+		
         Element_Handle();
 		get_mid_line();
 		qulv_characteristic();//曲率计算，辅助路况判断
@@ -543,6 +556,215 @@ void get_reference_point(const uint8 *image)
 
     white_max_point = (uint8)LIMIT_AB((int)reference_point * ABS_WHITE_MUL / 10, BLACKPOINT, 255);
     white_min_point = (uint8)LIMIT_AB((int)reference_point * ABS_BLACK_MUL / 10, BLACKPOINT, 255);
+}
+
+static void applyGammaCorrection_C(uint8 image[MT9V03X_H][MT9V03X_W], uint8 gamma_value)
+{
+    static uint8 lookup_table[256];
+    static uint8 cached_gamma_value = 0;
+    static uint8 lookup_table_ready = 0;
+    int i;
+    int row;
+    int col;
+    double gamma;
+    double inv_gamma;
+    double corrected_value;
+
+    if (gamma_value == 0)
+    {
+        return;
+    }
+
+    if (!lookup_table_ready || cached_gamma_value != gamma_value)
+    {
+        gamma = (double)gamma_value / 100.0;
+        inv_gamma = 1.0 / gamma;
+
+        for (i = 0; i < 256; i++)
+        {
+            corrected_value = pow((double)i / 255.0, inv_gamma) * 255.0;
+            if (corrected_value > 255.0)
+            {
+                corrected_value = 255.0;
+            }
+            lookup_table[i] = (uint8)corrected_value;
+        }
+
+        cached_gamma_value = gamma_value;
+        lookup_table_ready = 1;
+    }
+
+    for (row = 0; row < MT9V03X_H; row++)
+    {
+        for (col = 0; col < MT9V03X_W; col++)
+        {
+            image[row][col] = lookup_table[image[row][col]];
+        }
+    }
+}
+
+static uint8 calculate_binary_threshold(void)
+{
+    int i;
+    int row;
+    int col;
+    uint8 gray;
+    uint8 min_gray;
+    uint8 max_gray;
+    uint8 threshold;
+    uint8 small_count;
+    uint16 sample_count;
+    uint16 w0;
+    uint16 w1;
+    uint16 mean0;
+    uint16 mean1;
+    uint16 diff;
+    static uint16 pixel_count[256];
+    uint32 gray_sum;
+    uint32 sum0;
+    uint32 sum1;
+    uint32 score;
+    uint32 best_score;
+    static uint8 last_threshold = 90;
+    static uint8 threshold_frame_div = 1;
+
+    threshold_frame_div++;
+    if (threshold_frame_div < 2)
+    {
+        return last_threshold;
+    }
+    threshold_frame_div = 0;
+
+    min_gray = 255;
+    max_gray = 0;
+    sample_count = 0;
+    gray_sum = 0;
+    memset(pixel_count, 0, sizeof(pixel_count));
+
+    for (row = BINARY_OTSU_CROP_TOP;
+         row < BINARY_OTSU_CROP_TOP + BINARY_OTSU_CROP_HEIGHT;
+         row += BINARY_OTSU_ROW_STEP)
+    {
+        for (col = BINARY_OTSU_CROP_LEFT;
+             col < BINARY_OTSU_CROP_LEFT + BINARY_OTSU_CROP_WIDTH;
+             col += BINARY_OTSU_COL_STEP)
+        {
+            gray = mt9v03x_image[row][col];
+            pixel_count[gray]++;
+            gray_sum += gray;
+            sample_count++;
+
+            if (gray < min_gray)
+            {
+                min_gray = gray;
+            }
+            if (gray > max_gray)
+            {
+                max_gray = gray;
+            }
+        }
+    }
+
+    threshold = last_threshold;
+    if (sample_count > 0 && (uint8)(max_gray - min_gray) >= BINARY_OTSU_MIN_DIFF)
+    {
+        best_score = 0;
+        small_count = 0;
+        w0 = 0;
+        sum0 = 0;
+
+        for (i = 0; i < BINARY_OTSU_DARK_MIN; i++)
+        {
+            w0 += pixel_count[i];
+            sum0 += (uint32)i * pixel_count[i];
+        }
+
+        for (i = BINARY_OTSU_DARK_MIN; i < max_gray && i < 255; i++)
+        {
+            w0 += pixel_count[i];
+            sum0 += (uint32)i * pixel_count[i];
+
+            if ((i & (BINARY_OTSU_GRAY_STEP - 1)) != 0)
+            {
+                continue;
+            }
+
+            if (w0 == 0 || w0 >= sample_count)
+            {
+                continue;
+            }
+
+            w1 = sample_count - w0;
+            sum1 = gray_sum - sum0;
+            mean0 = (uint16)(sum0 / w0);
+            mean1 = (uint16)(sum1 / w1);
+            diff = (mean0 > mean1) ? (mean0 - mean1) : (mean1 - mean0);
+            score = (((uint32)w0 * (uint32)w1) >> 8) * (uint32)diff * (uint32)diff;
+
+            if (score >= best_score)
+            {
+                best_score = score;
+                threshold = (uint8)i;
+                small_count = 0;
+            }
+            else
+            {
+                small_count++;
+                if (small_count >= 5)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (threshold < BINARY_OTSU_MIN_THRESHOLD)
+    {
+        threshold = BINARY_OTSU_MIN_THRESHOLD;
+    }
+
+    if (threshold > last_threshold)
+    {
+        if ((uint8)(threshold - last_threshold) > 5)
+        {
+            threshold = (uint8)(last_threshold + 5);
+        }
+    }
+    else if ((uint8)(last_threshold - threshold) > 5)
+    {
+        threshold = (uint8)(last_threshold - 5);
+    }
+
+    if (max_gray > 5 && threshold >= max_gray)
+    {
+        threshold = (uint8)(max_gray - 2);
+    }
+
+    last_threshold = threshold;
+    return threshold;
+}
+
+uint8 Binarize_Mt9v03x_Image(void)
+{
+    int row;
+    int col;
+    uint8 threshold;
+
+    if (image_gamma_enable && image_gamma_value > 0)
+    {
+        applyGammaCorrection_C(mt9v03x_image, image_gamma_value);
+    }
+
+    threshold = calculate_binary_threshold();
+    for (row = 0; row < MT9V03X_H; row++)
+    {
+        for (col = 0; col < MT9V03X_W; col++)
+        {
+            mt9v03x_image[row][col] = (mt9v03x_image[row][col] > threshold) ? 1 : 0;
+        }
+    }
+
+    return threshold;
 }
 
 uint8 search_left_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start)
