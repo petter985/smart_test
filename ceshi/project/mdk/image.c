@@ -15,7 +15,6 @@ uint8 type2=0;//左环岛避免越界的操作
 #define ABS_WHITE_MUL       13.5
 #define ABS_BLACK_MUL       6.5
 #define BLACKPOINT          50
-#define DIFF_RATIO_THRESHOLD 20
 #define SEARCH_OFFSET       5
 #define STOP_BLACK_ROWS     3
 #define BINARY_OTSU_CROP_TOP       25
@@ -57,7 +56,7 @@ uint8 white_min_point = 70;
 uint8 image_gamma_enable = 0;
 uint8 image_gamma_value = 100;
 
-//uint8 image_01[MT9V03X_H][MT9V03X_W];
+uint8 image_01[MT9V03X_H][MT9V03X_W];
 uint8 kuandu_saidao[MT9V03X_H - 1] = {
     170, 169, 168, 167, 167, 166, 165, 165, 164, 163,
     162, 162, 161, 160, 160, 159, 158, 157, 157, 156,
@@ -201,8 +200,9 @@ void image_process(void)
     if (mt9v03x_finish_flag == 1)
     {
         //Transfer_Camera();
-        mt9v03x_finish_flag = 0;
+        
         clean();//把上次搜线结果归零，避免影响环岛等处理
+        Binarize_Mt9v03x_Image();
 		
         //ips200_show_int8(0, 0, white_min_point);
 		
@@ -221,7 +221,10 @@ void image_process(void)
             //Blacking();
             //ips200_show_int8(0, 0, final_mid_line - MID_W);
         }
+        mt9v03x_finish_flag = 0;
+
     }
+    
 }
 
 uint16 distance_L_Cross_out = 0;
@@ -484,7 +487,7 @@ void Mid_Col(uint8 index[][MT9V03X_W])
 
         for (row = MT9V03X_H - 1; row > min_row; row--)
         {
-            if (index[row][col] > white_min_point)
+            if (index[row][col] == 1)
             {
                 white_len++;
                 black_count = 0;
@@ -497,9 +500,9 @@ void Mid_Col(uint8 index[][MT9V03X_W])
                     /* 中间列+斑马线：向上偏移50行验证 */
                     if (is_mid_col && road_type.banmaxian &&
                         row > 62 &&
-                        index[row - 50][col] < white_min_point &&
-                        index[row - 51][col] < white_min_point &&
-                        index[row - 52][col] < white_min_point)
+                        index[row - 50][col] == 0 &&
+                        index[row - 51][col] == 0 &&
+                        index[row - 52][col] == 0)
                     {
                         break;
                     }
@@ -760,7 +763,7 @@ uint8 Binarize_Mt9v03x_Image(void)
     {
         for (col = 0; col < MT9V03X_W; col++)
         {
-            mt9v03x_image[row][col] = (mt9v03x_image[row][col] > threshold) ? 1 : 0;
+            image_01[row][col] = (mt9v03x_image[row][col] > threshold) ? 1 : 0;
         }
     }
 
@@ -778,38 +781,17 @@ uint8 search_left_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start)
         cur   = p_row[col];
         left2 = p_row[col - 2];
 
-        // 优先级1：参考点（左边点）是绝对白 → 还在赛道内，跳过
-        if (left2 > white_max_point)
+        if (left2 == 1)
         {
             continue;
         }
 
-        // 优先级2：参考点是绝对黑 → 这就是边界，返回参考点位置
-        if (left2 < white_min_point)
+        if (cur == 0)
         {
-					if(cur<white_min_point)
-					{
-						return 1;
-					}
-					else
-            return col - 2;
+            return 1;
         }
 
-        // 优先级3：中间灰度，计算差比和（需要亮→暗）
-        if (cur > left2)
-        {
-            uint16 sum = (uint16)cur + left2;
-            uint16 diff = cur - left2;
-
-            if (sum > 0)
-            {
-                int16 ratio = (int16)(diff * 200 / sum);
-                if (ratio > DIFF_RATIO_THRESHOLD)
-                {
-                    return col - 2;
-                }
-            }
-        }
+        return col - 2;
     }
     return 1;
 }
@@ -825,38 +807,17 @@ uint8 search_right_edge(uint8 index[][MT9V03X_W], uint8 row, uint8 start)
         cur    = p_row[col];
         right2 = p_row[col + 2];
 
-        // 优先级1：参考点（右边点）是绝对白 → 还在赛道内，跳过
-        if (right2 > white_max_point)
+        if (right2 == 1)
         {
             continue;
         }
 
-        // 优先级2：参考点是绝对黑 → 这就是边界，返回参考点位置
-        if (right2 < white_min_point)
+        if (cur == 0)
         {
-					if(cur<white_min_point)
-					{
-						return MT9V03X_W-1;
-					}
-					else
-            return col + 2;
+            return MT9V03X_W - 1;
         }
 
-        // 优先级3：中间灰度，计算差比和（需要亮→暗）
-        if (cur > right2)
-        {
-            uint16 sum = (uint16)cur + right2;
-            uint16 diff = cur - right2;
-
-            if (sum > 0)
-            {
-                int16 ratio = (int16)(diff * 200 / sum);
-                if (ratio > DIFF_RATIO_THRESHOLD)
-                {
-                    return col + 2;
-                }
-            }
-        }
+        return col + 2;
     }
     return MT9V03X_W - 1;
 }
@@ -870,15 +831,12 @@ void Search_edge(void)
     /* 每帧重置 */
     search_line_end = 10;
     
-    /* 第0步：获取参考点 */
-    get_reference_point((const uint8 *)mt9v03x_image);
-    
     /* 初始化丢线计数 */
     l_lose_value = 0;
     r_lose_value = 0;
     
     /* ----- 调用 Mid_Col 计算最长白列，更新 search_line_end 和 start_col_for_search ----- */
-    Mid_Col(mt9v03x_image);
+    Mid_Col(image_01);
     
     /* ----- 正式逐行搜索 ----- */
     for (row = MT9V03X_H - 1; row > search_line_end; row--)
@@ -921,7 +879,7 @@ void Search_edge(void)
         }
         
         /* 搜索左边界 */
-        left_edge = search_left_edge(mt9v03x_image, row, start_l);
+        left_edge = search_left_edge(image_01, row, start_l);
         if (left_edge > 1)
         {
             l_line_x[row] = left_edge;
@@ -935,7 +893,7 @@ void Search_edge(void)
         }
         
         /* 搜索右边界 */
-				right_edge = search_right_edge(mt9v03x_image, row, start_r);
+				right_edge = search_right_edge(image_01, row, start_r);
         if (right_edge < MT9V03X_W - 1)
         {
             r_line_x[row] = right_edge;
@@ -954,11 +912,11 @@ void Blacking()
 {
     for (height = (MT9V03X_H - 1); height > search_line_end; height--)
     {
-        mt9v03x_image[height][(uint8)m_line_x[height]] = 0x00;
-        mt9v03x_image[height][l_line_x[height]] = 0x00;
-        mt9v03x_image[height][r_line_x[height]] = 0x00;
+        image_01[height][(uint8)m_line_x[height]] = 0x00;
+        image_01[height][l_line_x[height]] = 0x00;
+        image_01[height][r_line_x[height]] = 0x00;
     }
-    ips200_show_gray_image(0, 0, mt9v03x_image[0], MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 0);
+    ips200_show_gray_image(0, 0, image_01[0], MT9V03X_W, MT9V03X_H, MT9V03X_W, MT9V03X_H, 1);
 }
 
 void Calculate_Offset_1(void) 
@@ -1854,7 +1812,7 @@ void Check_Out(void)
     for (col = 10; col < 170; col++)
     {
         total_count++;
-        if (mt9v03x_image[row][col] < 130)//大了灵敏130
+        if (image_01[row][col] == 0)
         {
             black_count++;
         }
@@ -1904,7 +1862,7 @@ void zebra_test(void)
         /* 从0到187全宽扫描，统计黑段个数并记录首尾黑段中心 */
         for (col = 0; col < MT9V03X_W; col++)
         {
-            if (mt9v03x_image[row][col] < white_min_point)
+            if (image_01[row][col] == 0)
             {
                 if (!in_black)
                 {
